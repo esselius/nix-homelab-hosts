@@ -16,6 +16,7 @@ in
   hardware.raspberry-pi.firmware = {
     enable = true;
     uboot.enable = true;
+    useGenerationDeviceTree = true;
   };
 
   boot.supportedFilesystems = [ "btrfs" ];
@@ -43,6 +44,8 @@ in
   };
 
   security.sudo.wheelNeedsPassword = false;
+
+  users.users.root.openssh.authorizedKeys.keys = [ sshPublicKey ];
 
   users.groups.incus-admin = { };
 
