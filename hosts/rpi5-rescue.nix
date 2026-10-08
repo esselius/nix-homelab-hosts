@@ -80,6 +80,10 @@
     };
   };
 
+  services.getty.autologinUser = "admin";
+
+  users.users.admin.initialPassword = "rescue";
+
   security.sudo.wheelNeedsPassword = false;
 
   users.users.admin = {
