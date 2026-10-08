@@ -1,4 +1,4 @@
-{ inputs, config, pkgs, ... }:
+{ inputs, config, pkgs, lib, ... }:
 
 {
   imports = [
@@ -19,7 +19,51 @@
     uboot.enable = true;
   };
 
+  hardware.raspberry-pi.configtxt.deviceTreeOverlays.all = lib.mkForce [ ];
+
   boot.supportedFilesystems = [ "btrfs" ];
+
+  services.journald.settings.Journal.Storage = "persistent";
+
+  systemd.services.boot-diagnostics = {
+    description = "Write boot diagnostics to the firmware FAT for offline pickup";
+    serviceConfig = {
+      Type = "oneshot";
+    };
+    script = ''
+      target=/boot/firmware
+      mountpoint -q "$target" || mount "$target" || exit 0
+      {
+        uname -a
+        uptime
+        echo
+        echo "model: $(cat /proc/device-tree/model 2>/dev/null)"
+        echo
+        echo "== dmesg =="
+        dmesg
+        echo
+        echo "== block devices =="
+        lsblk -f
+        echo
+        echo "== network =="
+        ip -br addr
+        ip route
+        echo
+        echo "== failed units =="
+        systemctl --failed --no-pager || true
+      } > "$target/diag.txt" 2>&1
+      chmod 666 "$target/diag.txt"
+    '';
+  };
+
+  systemd.timers.boot-diagnostics = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "5s";
+      OnUnitActiveSec = "10s";
+      AccuracySec = "1s";
+    };
+  };
 
   services.openssh = {
     enable = true;
