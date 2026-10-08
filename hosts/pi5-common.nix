@@ -23,6 +23,7 @@ in
 
   networking.nftables.enable = true;
   networking.firewall.trustedInterfaces = [ "incusbr0" ];
+  networking.firewall.allowedTCPPorts = [ 22 8443 ];
 
   zramSwap = {
     enable = true;
