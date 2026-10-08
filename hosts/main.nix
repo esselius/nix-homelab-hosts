@@ -18,10 +18,7 @@
   fileSystems."/boot/firmware" = {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
-    options = [
-      "nofail"
-      "noauto"
-    ];
+    options = [ "nofail" ];
   };
 
   boot.initrd.systemd.services.root-wipe = {

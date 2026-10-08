@@ -55,8 +55,9 @@ NVMe (a single-host data disk, the only thing disko ever wipes):
 
 Partition ownership rules (what keeps updates boring):
 
-- SD p1 and p3 are owned by the main host configs; the rescue OS disables firmware-module FAT
-  staging so it never fights the main OS.
+- SD p1 and p3 are owned by the main host configs; the rescue OS never remounts the FAT at
+  runtime (`noauto`), so its activation staging only fires at image-build time - from then on
+  the main OS owns every FAT refresh.
 - SD p2 is owned by `rpi5-rescue` alone; its rebuilds never touch p1/p3/NVMe.
 - If the rescue OS is ever beyond repair, re-flashing is safe and expected: the fresh image boots
   p2 again, and the next `nixos-anywhere` run repopulates p3 during install.
