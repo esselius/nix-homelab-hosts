@@ -27,6 +27,12 @@
 
   systemd.services.boot-diagnostics = {
     description = "Write boot diagnostics to the firmware FAT for offline pickup";
+    path = with pkgs; [
+      coreutils
+      util-linux
+      iproute2
+      systemd
+    ];
     serviceConfig = {
       Type = "oneshot";
     };
