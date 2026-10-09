@@ -1,7 +1,13 @@
 { pkgs, ... }:
 {
+  # Incus asserts on this directly: "Incus on NixOS is unsupported using
+  # iptables. Set networking.nftables.enable = true;" (confirmed via a
+  # real build failure with this unset).
+  networking.nftables.enable = true;
+
   # Trusted so incus container/VM traffic isn't dropped by the NixOS
-  # firewall, and the API port for the UI/remote clients.
+  # firewall, and the API port for the UI/remote clients. (Port 22 doesn't
+  # need declaring - services.openssh opens its own port by default.)
   networking.firewall.trustedInterfaces = [ "incusbr0" ];
   networking.firewall.allowedTCPPorts = [ 8443 ];
 
