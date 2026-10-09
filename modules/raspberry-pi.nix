@@ -2,10 +2,6 @@
 {
   # Shared by every Pi 5 host in this flake, including the bootstrap
   # installer: vendor kernel/firmware profile, and the overlay it needs.
-  # (btrfs support doesn't need declaring here - NixOS auto-populates
-  # boot.supportedFilesystems from every fsType declared across
-  # fileSystems, confirmed via nix eval: btrfs/ext4/vfat all already
-  # present without any explicit boot.supportedFilesystems setting.)
   imports = [ inputs.nixos-hardware.nixosModules.raspberry-pi-5 ];
 
   nixpkgs.overlays = [
