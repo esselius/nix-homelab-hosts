@@ -16,7 +16,8 @@ let
   # overrideScope, so the integrations' own dependencies still come from the
   # cached python set). Upstream already sets doCheck = false there; drop this
   # once the metadata check is fixed upstream.
-  datadogIntegrationsOverlay = _final: prev:
+  datadogIntegrationsOverlay =
+    _final: prev:
     let
       python3Packages = prev.python3Packages // {
         buildPythonPackage =
@@ -26,9 +27,9 @@ let
     {
       datadog-integrations-core = lib.setFunctionArgs (
         extras:
-        lib.callPackageWith (prev // { inherit python3Packages; })
-          (prev.path + "/pkgs/tools/networking/dd-agent/integrations-core.nix")
-          { extraIntegrations = extras; }
+        lib.callPackageWith (prev // { inherit python3Packages; }) (
+          prev.path + "/pkgs/tools/networking/dd-agent/integrations-core.nix"
+        ) { extraIntegrations = extras; }
       ) (lib.functionArgs prev.datadog-integrations-core);
     };
 in

@@ -40,6 +40,10 @@
 
     security.sudo.wheelNeedsPassword = false;
 
+    # Purely declarative users (impermanence: no /etc/passwd to persist, and no
+    # runtime `passwd`/`useradd` that would be lost on the next boot anyway).
+    users.mutableUsers = false;
+
     users.users.root.openssh.authorizedKeys.keys = [ config.site.sshPublicKey ];
 
     users.users.admin = {

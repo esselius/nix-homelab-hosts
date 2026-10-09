@@ -1,6 +1,9 @@
 { ... }:
 {
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  nix.settings.experimental-features = [
+    "nix-command"
+    "flakes"
+  ];
   nix.settings.trusted-users = [ "@wheel" ];
 
   nix.gc = {

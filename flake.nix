@@ -59,15 +59,9 @@
     in
     {
       nixosConfigurations = {
-        "rpi5-8gb" = mkHost "rpi5-8gb" (
-          mainHostModules ++ [ { imports = [ ./hosts/rpi5-8gb.nix ]; } ]
-        );
-        "rpi5-4gb" = mkHost "rpi5-4gb" (
-          mainHostModules ++ [ { imports = [ ./hosts/rpi5-4gb.nix ]; } ]
-        );
-        "rpi5-bootstrap" = mkHost "rpi5-bootstrap" (
-          [ { imports = [ ./hosts/rpi5-bootstrap.nix ]; } ]
-        );
+        "rpi5-8gb" = mkHost "rpi5-8gb" (mainHostModules ++ [ { imports = [ ./hosts/rpi5-8gb.nix ]; } ]);
+        "rpi5-4gb" = mkHost "rpi5-4gb" (mainHostModules ++ [ { imports = [ ./hosts/rpi5-4gb.nix ]; } ]);
+        "rpi5-bootstrap" = mkHost "rpi5-bootstrap" ([ { imports = [ ./hosts/rpi5-bootstrap.nix ]; } ]);
       };
 
       images.rpi5-bootstrap = self.nixosConfigurations."rpi5-bootstrap".config.system.build.sdImage;
@@ -86,6 +80,7 @@
             pkgs.age
             # Convert each Pi's SSH host key into an age recipient.
             pkgs.ssh-to-age
+            pkgs.opencode
           ];
 
           # sops 3.13.3 does not read ~/.ssh/id_ed25519 directly (its SSH
@@ -95,6 +90,46 @@
           shellHook = ''
             export SOPS_AGE_KEY_CMD="ssh-to-age -private-key -i $HOME/.ssh/id_ed25519"
           '';
+        };
+
+      formatter.aarch64-darwin = nixpkgs.legacyPackages.aarch64-darwin.nixfmt;
+
+      checks.aarch64-darwin =
+        let
+          pkgs = nixpkgs.legacyPackages.aarch64-darwin;
+          # Eval does not require the target platform, so a Darwin `nix flake
+          # check` can still prove the aarch64-linux hosts evaluate.
+          hostDrvs = [
+            self.nixosConfigurations."rpi5-8gb".config.system.build.toplevel
+            self.nixosConfigurations."rpi5-4gb".config.system.build.toplevel
+            self.nixosConfigurations."rpi5-bootstrap".config.system.build.toplevel
+            self.images.rpi5-bootstrap
+          ];
+        in
+        {
+          # Force evaluation of every host's toplevel drvPath (eval, not build):
+          # fails here if any host stops evaluating.
+          eval-all = builtins.deepSeq (map (d: d.drvPath) hostDrvs) (
+            pkgs.runCommand "eval-all" { } ''
+              touch $out
+            ''
+          );
+
+          # Formatting gate, matching `nix fmt`.
+          fmt =
+            pkgs.runCommand "fmt-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.fd
+                  pkgs.nixfmt
+                ];
+                src = self;
+              }
+              ''
+                cd "$src"
+                fd --extension nix --exec nixfmt --check {}
+                touch $out
+              '';
         };
     };
 }
