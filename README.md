@@ -166,6 +166,29 @@ empty. Several non-obvious things had to be fixed empirically:
 `nixos-anywhere` itself). Once a main system (`rpi5-8gb`/`rpi5-4gb`) is actually running, root SSH
 is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollback" below).
 
+**Why root SSH can't be disabled on the bootstrap installer too**: tried this (disable root,
+`admin@` + passwordless sudo, same as the main systems) and it fails specifically for
+`nixos-anywhere`, for a hardcoded reason in its own source
+(`libexec/nixos-anywhere/nixos-anywhere.sh`):
+
+```bash
+# Installation will fail if non-root user is used for installer.
+# Switch to root user by copying authorized_keys.
+if [[ ${isInstaller} == "y" ]] && [[ ${sshUser} != "root" ]]; then
+  runSsh "${maybeSudo} mkdir -p /root/.ssh; ${maybeSudo} cp ~/.ssh/authorized_keys /root/.ssh || true"
+  sshConnection="root@${sshHost}"
+fi
+```
+
+For any target with `system.nixos.variant_id = "installer"` (which this bootstrap image sets,
+deliberately, to make `nixos-anywhere`'s `runKexec()` early-return and skip kexec entirely - Pi 5
+kexec is flaky; this isn't just our own finding, it matches other reports of full homelab NixOS
+migrations hitting the same Pi 5 limitation and choosing the identical SD-image workaround), it
+unconditionally switches to `root@<host>` for the rest of the install, regardless of what user was
+originally targeted. There's no flag to override this. So: skipping kexec (deliberate, for Pi 5
+stability) and disabling root SSH on the installer are mutually exclusive; this repo keeps kexec
+skipped and root SSH enabled, contained to a throwaway image that gets reflashed before every use.
+
 ### Install / hard reset (wipes NVMe, from the Mac)
 
 ```bash
