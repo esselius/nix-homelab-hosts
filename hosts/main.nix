@@ -9,18 +9,6 @@
   fileSystems."/".neededForBoot = true;
   fileSystems."/persist".neededForBoot = true;
 
-  fileSystems."/boot" = {
-    device = "/dev/disk/by-label/NIXOS_BOOT";
-    fsType = "ext4";
-    options = [ "noatime" ];
-  };
-
-  fileSystems."/boot/firmware" = {
-    device = "/dev/disk/by-label/FIRMWARE";
-    fsType = "vfat";
-    options = [ "nofail" ];
-  };
-
   boot.initrd.systemd.services.root-wipe = {
     description = "Reset @root btrfs subvolume to a pristine empty state";
     wantedBy = [ "sysroot.mount" ];

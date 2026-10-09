@@ -39,6 +39,7 @@
       mainHostModules = [
         ./hosts/pi5-common.nix
         ./disko-nvme.nix
+        ./disko-sd.nix
         disko.nixosModules.disko
         impermanence.nixosModules.impermanence
       ];
