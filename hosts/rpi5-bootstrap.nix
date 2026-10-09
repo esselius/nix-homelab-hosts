@@ -1,32 +1,19 @@
-{ inputs, config, pkgs, lib, ... }:
-
-let
-  sshPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMdasDSm/XlOpv15asMENnQ/E9W9rXExBcUAVd/G6Mo";
-in
+{ inputs, pkgs, ... }:
 {
   imports = [
     "${inputs.nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
-    inputs.nixos-hardware.nixosModules.raspberry-pi-5
+    ../modules/raspberry-pi.nix
+    ../modules/nix-settings.nix
+    ../modules/ssh-access.nix
   ];
-
-  nixpkgs.overlays = [
-    (final: prev: {
-      makeModulesClosure = x: prev.makeModulesClosure (x // { allowMissing = true; });
-    })
-  ];
-
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   system.nixos.variant_id = "installer";
 
   networking.hostName = "rpi5-bootstrap";
 
-  hardware.raspberry-pi.firmware = {
-    enable = true;
-    uboot.enable = true;
-  };
-
-  boot.supportedFilesystems = [ "btrfs" ];
+  # Required by nixos-anywhere for installer-variant targets - see
+  # modules/ssh-access.nix for the full explanation.
+  site.permitRootLogin = "prohibit-password";
 
   sdImage.firmwareSize = 256;
   sdImage.rootVolumeLabel = "NIXOS_BOOT";
@@ -35,29 +22,11 @@ in
     resize2fs "$root_fs" 4G
   '';
 
-  services.openssh = {
-    enable = true;
-    settings = {
-      PasswordAuthentication = false;
-      KbdInteractiveAuthentication = false;
-      PermitRootLogin = "prohibit-password";
-    };
-  };
-
   services.getty.autologinUser = "admin";
 
-  users.users.admin.initialPassword = "bootstrap";
-
-  security.sudo.wheelNeedsPassword = false;
-
-  users.users.admin = {
-    isNormalUser = true;
-    description = "admin";
-    extraGroups = [ "wheel" ];
-    openssh.authorizedKeys.keys = [ sshPublicKey ];
-  };
-
-  users.users.root.openssh.authorizedKeys.keys = [ sshPublicKey ];
+  # No password: admin is reached via the SSH key (modules/ssh-access.nix)
+  # or the console autologin above. This is a throwaway image, reflashed
+  # fresh before every use - nothing persists here across reflashes.
 
   environment.systemPackages = with pkgs; [ vim ];
 

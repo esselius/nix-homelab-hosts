@@ -49,13 +49,11 @@ Pi 5 EEPROM (SPI) -> stock firmware (SD p1 FAT) -> u-boot.bin -> extlinux.conf (
   nixos-hardware #1777/#854), and 16K pages. Empirically, **incus VM guests (4K-page Debian 13
   cloud image) boot fine on this 16K host kernel** - the commonly cited 16K-host/4K-guest KVM
   incompatibility did not reproduce in testing on this board/kernel combination.
-- `hardware.raspberry-pi.firmware.useGenerationDeviceTree = true` re-stages the FAT with the
-  *booted generation's* device trees on every switch, instead of only the vendor firmware
-  package's. Belt-and-suspenders alongside the vendor kernel choice.
-- `nixpkgs.overlays` patches `makeModulesClosure` with `allowMissing = true` - the profile's
-  `hardware.enableAllHardware = true` (inherited from the stock sd-image module) requests modules
-  like `dw-hdmi` that the vendor kernel fork doesn't build; without this override the initrd build
-  fails outright.
+- `nixpkgs.overlays` patches `makeModulesClosure` with `allowMissing = true` - the
+  `raspberry-pi-5` profile's initrd wants modules (e.g. `tpm-crb`) that the vendor kernel fork
+  doesn't build; without this override the initrd build fails outright on the first missing module.
+  (Not an effect of `hardware.enableAllHardware`, which is `false` in this config - verified via
+  `nix eval` and by confirming the build genuinely fails without the overlay.)
 
 ### Storage
 
@@ -223,7 +221,7 @@ This replaces the old manual chroot + `nixos-enter` dance entirely for this case
 
 ### Update + rollback
 
-Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `hosts/pi5-common.nix`)
+Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `modules/ssh-access.nix`)
 - day-to-day access is via `admin` (passwordless `sudo`):
 
 ```bash
@@ -277,7 +275,7 @@ Confirmed working on real hardware (8 GB board):
 ## Known risks
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
-  reboot). Any new service gets reviewed against `pi5-common.nix`'s persist list.
+  reboot). Any new service gets reviewed against `modules/impermanence-persist.nix`'s persist list.
 - NVMe adapter/EEPROM quirks exist for some M.2 hats (nvmd/nixos-raspberrypi #117) - only relevant
   to a future NVMe-boot path; irrelevant to the current SD-boot design.
 - Power: 27 W USB-C PSU + active cooling required for incus-sustained load on either board.

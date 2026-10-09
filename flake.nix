@@ -37,7 +37,16 @@
         };
 
       mainHostModules = [
-        ./hosts/pi5-common.nix
+        ./modules/raspberry-pi.nix
+        ./modules/debug-boot-verbose.nix
+        ./modules/nix-settings.nix
+        ./modules/ssh-access.nix
+        ./modules/zram.nix
+        ./modules/networking-firewall.nix
+        ./modules/incus.nix
+        ./modules/root-wipe.nix
+        ./modules/btrfs-maintenance.nix
+        ./modules/impermanence-persist.nix
         ./disko-nvme.nix
         ./disko-sd.nix
         disko.nixosModules.disko
