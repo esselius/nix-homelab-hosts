@@ -22,12 +22,12 @@
   };
 
   boot.initrd.systemd.services.root-wipe = {
-    enable = false;
     description = "Reset @root btrfs subvolume to a pristine empty state";
     wantedBy = [ "sysroot.mount" ];
     before = [ "sysroot.mount" ];
     unitConfig.DefaultDependencies = false;
     serviceConfig.Type = "oneshot";
+    serviceConfig.RemainAfterExit = true;
     serviceConfig.TimeoutStartSec = "30s";
     script = ''
       set -x
