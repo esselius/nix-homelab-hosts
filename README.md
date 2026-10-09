@@ -94,16 +94,33 @@ in a script - deliberately, until it's been run enough times unattended to trust
 ### Root-wipe mechanics (impermanence)
 
 `boot.initrd.systemd.services.root-wipe` runs before `sysroot.mount`, deletes `@root`, recreates it
-empty. Two non-obvious things had to be fixed empirically:
+empty. Several non-obvious things had to be fixed empirically:
 
 1. **systemd auto-creates nested subvolumes** under `/` on first boot (`@root/srv`,
-   `@root/var/lib/portables`, `@root/var/lib/machines`, `@root/var/tmp`). A plain
+   `@root/var/lib/portables`, `@root/var/lib/machines`, `@root/tmp`, `@root/var/tmp`). A plain
    `btrfs subvolume delete /btrfs_tmp/@root` fails with "Directory not empty" because of these
    children - they must be deleted first.
 2. **The initrd environment has no `awk`**, and its shell wrapper does not reliably support bash
    array syntax or process substitution (`< <(...)`) - a version using either of those *hung the
    whole boot* rather than failing cleanly. The working recipe parses `btrfs subvolume list`
    output with a POSIX `while read` loop against a temp file, no arrays, no process substitution.
+3. **`serviceConfig.RemainAfterExit = true` is required.** Without it, systemd started
+   `root-wipe.service` *twice* per boot (confirmed via `journalctl`: two separate "Starting Reset
+   @root..." lines, ~1.5s apart, same boot) - two near-simultaneous `mount` + btrfs-subvolume
+   delete/create passes against the same NVMe device during fragile early-initrd timing reliably
+   hung the entire boot with zero further console output. This was the actual cause of every boot
+   hang encountered during initial bring-up (initially, and wrongly, suspected to be async discard,
+   DTB generation, device-unit ordering, or a vendor-kernel/NVMe hardware issue - all ruled out by
+   direct testing before the real cause was found). Diagnosed safely by replaying the exact
+   mount/delete/create sequence against a disposable test subvolume (shaped identically to a real
+   `@root`, including the same 5 systemd-created nested subvolumes) via a temporary diagnostic
+   initrd unit, from an already-booted warm system - reproduced the double-start and the fix there,
+   with zero reboot-cycle risk, before touching the real `root-wipe` service again.
+4. `neededForBoot` on `/boot` and `/boot/firmware` is **not** needed and actively harmful: U-Boot
+   has already loaded the kernel+initrd into memory before Linux starts, so initrd never needs
+   those SD-card mounts. Marking them `neededForBoot = true` forces initrd to probe the SD/MMC
+   controller concurrently with NVMe PCIe enumeration, which contributed to early hangs before the
+   `RemainAfterExit` issue was found.
 
 ### incus
 
@@ -209,10 +226,9 @@ Confirmed working on real hardware (8 GB board):
 - The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
   `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
   exercised by hand several times, not yet scripted
-
-Still to re-verify after the partition-layout simplification: the full wipe-cycle test (marker file
-on `/` disappears after reboot, `/persist` marker survives) - the POSIX-safe `root-wipe` rewrite was
-in place but the test run was interrupted before the result was captured.
+- Full impermanence wipe-cycle test, post partition-layout-simplification and post
+  `root-wipe` `RemainAfterExit` fix: marker file on `/` correctly disappears after reboot,
+  `/persist` marker correctly survives, two consecutive clean reboots, zero failed units each time
 
 ## Known risks
 
