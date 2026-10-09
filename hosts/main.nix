@@ -56,6 +56,8 @@
     };
   };
 
+  systemd.tmpfiles.rules = [ "d /persist/incus-pool 0755 root root -" ];
+
   virtualisation.incus = {
     enable = true;
     ui.enable = true;
