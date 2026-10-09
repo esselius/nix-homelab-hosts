@@ -41,8 +41,10 @@ in
   hardware.raspberry-pi.firmware = {
     enable = true;
     uboot.enable = true;
-    useGenerationDeviceTree = true;
   };
+
+  boot.consoleLogLevel = 8;
+  boot.kernelParams = [ "ignore_loglevel" ];
 
   boot.supportedFilesystems = [ "btrfs" ];
 

@@ -13,29 +13,31 @@
     device = "/dev/disk/by-label/NIXOS_BOOT";
     fsType = "ext4";
     options = [ "noatime" ];
-    neededForBoot = true;
   };
 
   fileSystems."/boot/firmware" = {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
     options = [ "nofail" ];
-    neededForBoot = true;
   };
 
   boot.initrd.systemd.services.root-wipe = {
+    enable = false;
     description = "Reset @root btrfs subvolume to a pristine empty state";
     wantedBy = [ "sysroot.mount" ];
     before = [ "sysroot.mount" ];
     unitConfig.DefaultDependencies = false;
     serviceConfig.Type = "oneshot";
+    serviceConfig.TimeoutStartSec = "30s";
     script = ''
+      set -x
       for i in $(seq 1 200); do
         [ -e /dev/disk/by-partlabel/NVME_ROOT ] && break
         sleep 0.05
       done
+      udevadm settle --timeout=10 || true
       mkdir -p /btrfs_tmp
-      mount /dev/disk/by-partlabel/NVME_ROOT /btrfs_tmp
+      mount -o nodiscard /dev/disk/by-partlabel/NVME_ROOT /btrfs_tmp
       if [ -e /btrfs_tmp/@root ]; then
         btrfs property set /btrfs_tmp/@root ro false 2>/dev/null || true
         btrfs subvolume list -o /btrfs_tmp/@root > /btrfs_tmp/children.txt
@@ -51,6 +53,8 @@
       rmdir /btrfs_tmp
     '';
   };
+
+  services.fstrim.enable = true;
 
   services.snapper = {
     configs."persist" = {
