@@ -11,7 +11,11 @@ in
 {
   imports = [ inputs.nixos-hardware.nixosModules.raspberry-pi-5 ];
 
-  boot.kernelPackages = pkgs.linuxPackages_latest;
+  nixpkgs.overlays = [
+    (final: prev: {
+      makeModulesClosure = x: prev.makeModulesClosure (x // { allowMissing = true; });
+    })
+  ];
 
   hardware.raspberry-pi.firmware = {
     enable = true;

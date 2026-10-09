@@ -6,13 +6,17 @@
     inputs.nixos-hardware.nixosModules.raspberry-pi-5
   ];
 
+  nixpkgs.overlays = [
+    (final: prev: {
+      makeModulesClosure = x: prev.makeModulesClosure (x // { allowMissing = true; });
+    })
+  ];
+
   sdImage.populateRootCommands = "${config.boot.loader.generic-extlinux-compatible.populateCmd} -c ${config.system.build.toplevel} -d ./files/boot";
 
   system.nixos.variant_id = "installer";
 
   networking.hostName = "rpi5-rescue";
-
-  boot.kernelPackages = pkgs.linuxPackages_latest;
 
   hardware.raspberry-pi.firmware = {
     enable = true;
