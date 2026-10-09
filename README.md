@@ -71,7 +71,7 @@ NVMe (the only disk disko / `nixos-anywhere` ever wipes):
 |--------|-------|----------|
 | `@root` | `/` | rolled back to pristine at every boot (impermanence, btrfs recipe - no tmpfs, RAM matters on 4/8 GB) |
 | `@nix` | `/nix` | persists |
-| `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/log` + persistent journald, `/home`, `/root`, git copy of this flake |
+| `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/log` + persistent journald. Deliberately **not** persisted: `/etc/nixos` + `/etc/nix` (declarative, and a flake checkout doesn't belong in `/etc/nixos`), `/root`, `/home` |
 | `@snapshots` | `/snapshots` | snapper's snapshot store for `/persist` (also bind-mounted at `/persist/.snapshots` - see note) |
 
 snapper: `services.snapper.configs."persist"` snapshots `/persist` on a nightly timeline
@@ -317,7 +317,8 @@ installed before it can decrypt the GoDaddy secret:
 nix develop
 ssh admin@<pi-ip> sudo cat /etc/ssh/ssh_host_ed25519_key.pub | ssh-to-age   # -> .sops.yaml
 
-# create / rekey the secret (Mac edits use ~/.ssh/id_ed25519 automatically):
+# create / rekey the secret (run inside `nix develop`, whose shellHook sets
+# SOPS_AGE_KEY_CMD to derive an age identity from ~/.ssh/id_ed25519):
 sops secrets/rpi5.yaml              # godaddy_acme: |
                                     #   GODADDY_API_KEY=...
                                     #   GODADDY_API_SECRET=...
@@ -328,9 +329,12 @@ Then set `local.incus.tls.acme.enable = true;` on any host whose key is a recipi
 The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for clients to reach it;
 DNS-01 validation itself needs no inbound access.
 
-Mac client certificate: run any `incus` command once to generate `~/.config/incus/client.crt`,
-commit it as `certs/macbook.crt`, and set `local.incus.tls.clientCertificates.macbook` on each host.
-Then:
+Client certs are trusted declaratively via the preseed `certificates` list. The repo already enrols
+the browser-generated UI cert (`certs/incus-ui-localho.st.crt` ->
+`clientCertificates."incus-ui-localho.st"`). For the `incus` CLI, either add the Mac's client cert
+the same way (run any `incus` command once to generate `~/.config/incus/client.crt`, commit it under
+`certs/`, and add it to `clientCertificates`), or use a one-time join token (`incus config trust
+add`). Then:
 
 ```bash
 incus remote add rpi5-8gb https://rpi5-8gb.x.esselius.dev:8443
@@ -343,8 +347,12 @@ Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `modul
 
 ```bash
 nix flake update          # deliberate bumps only
-nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<pi-ip> --sudo
+nixos-rebuild switch --flake .#rpi5-8gb \
+  --target-host admin@<pi-ip> --build-host admin@<pi-ip> --sudo
 ```
+
+`--build-host` (the Pi building its own closure) matters here: the vendor kernel is uncached, and the
+Pi already has it in its store, so building on the Mac would rebuild it via the `linux-builder`.
 
 Rollback after a bad update: choose the previous generation at the U-Boot prompt (extlinux menu, SD
 p2). Root state is irrelevant (impermanence), so rollback is purely about kernel/generation
@@ -383,6 +391,8 @@ Confirmed working on real hardware (8 GB board):
   on `:8443` (needed `LEGO_DNS_PROPAGATION_DISABLE_RNS` - see TLS section); `acme.domain`/`provider`
   set through the preseed, creds from the sops `godaddy_acme` EnvironmentFile, `nixos-rebuild
   switch` from macOS via `--build-host` (host reuses its uncached kernel)
+- preseed client-cert trust: the browser-generated UI cert (`incus-ui-localho.st`) is enrolled via
+  `local.incus.tls.clientCertificates` and accepted by incusd (`incus config trust list`)
 - The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
   `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
   exercised by hand several times, not yet scripted
@@ -404,8 +414,6 @@ Pre-flight tested from macOS (not on the Pi):
 
 Not yet verified on hardware:
 
-- preseed client-cert trust: no client enrolled yet (generate the Mac client cert and set
-  `local.incus.tls.clientCertificates`)
 - the 4 GB host (`rpi5-8gb` is the one exercised so far): needs its SSH key as a sops recipient and
   `acme.enable = true`
 
