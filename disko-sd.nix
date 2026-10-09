@@ -13,9 +13,19 @@
   # with "format" mode - both would reformat the SD card, destroying the
   # bootstrap/bootloader content that lives there. Only "mount" mode is
   # safe for this disk.
+  #
+  # Defense in depth: `destroy = false` below additionally excludes this disk
+  # from disko's destroy stage (which runs `wipefs --all` on every partition
+  # plus the whole disk, and zeroes the MBR boot sector - genuinely
+  # destructive, not just a "format if empty" no-op) even if `nixos-anywhere`
+  # is ever run without `--disko-mode mount` by mistake. This was a real gap:
+  # the documented hard-reset playbook (no `--disko-mode` flag, default mode)
+  # would otherwise wipe the SD card too, since default mode destroys *every*
+  # disk declared in disko.devices, not just the one being targeted for reuse.
   disko.devices.disk.sd = {
     type = "disk";
     device = "/dev/mmcblk0";
+    destroy = false;
     content = {
       type = "table";
       format = "msdos";
