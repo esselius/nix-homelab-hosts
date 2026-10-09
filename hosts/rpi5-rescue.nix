@@ -12,6 +12,8 @@
     })
   ];
 
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
   sdImage.populateRootCommands = "${config.boot.loader.generic-extlinux-compatible.populateCmd} -c ${config.system.build.toplevel} -d ./files/boot";
 
   system.nixos.variant_id = "installer";

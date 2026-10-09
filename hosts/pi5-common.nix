@@ -17,6 +17,8 @@ in
     })
   ];
 
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
   hardware.raspberry-pi.firmware = {
     enable = true;
     uboot.enable = true;
