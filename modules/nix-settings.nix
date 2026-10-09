@@ -1,7 +1,9 @@
 { ... }:
 {
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
-  nix.settings.trusted-users = [ "root" "@wheel" ];
+  # "root" is already trusted by default (confirmed via nix eval) - only
+  # @wheel is the actual addition here.
+  nix.settings.trusted-users = [ "@wheel" ];
 
   nix.gc = {
     automatic = true;
