@@ -36,11 +36,6 @@
       default = [ ];
       internal = true;
     };
-    certificates = lib.mkOption {
-      type = lib.types.listOf lib.types.attrs;
-      default = [ ];
-      internal = true;
-    };
   };
 
   config = {

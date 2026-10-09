@@ -203,9 +203,11 @@ so a browser warns and connecting via LAN IP is a name mismatch regardless of tr
   reachability and no name resolution on the Pi; the GoDaddy API key/secret live in a sops secret
   (`godaddy_acme`) injected as `systemd.services.incus.serviceConfig.EnvironmentFile`. Clients still
   need the name to resolve (A record) to connect.
-- **Client auth: no mTLS and no IdP.** The Mac's incus client cert is trusted declaratively via the
-  preseed `certificates` list (`local.incus.tls.clientCertificates`) - no CA, no join token, no OIDC
-  broker. (Considered and rejected - see decisions ledger.)
+- **Client auth: no mTLS and no IdP.** Client certs (`local.incus.tls.clientCertificates`) are
+  trusted idempotently by an `incus-trust-clients` oneshot, not via the preseed `certificates` list
+  (which is create-only and errors "already in trust store" on the re-runs that happen whenever
+  `incus.service` restarts) - no CA, no join token, no OIDC broker. (Considered and rejected - see
+  decisions ledger.)
 - Names: `rpi5-8gb.x.esselius.dev` / `rpi5-4gb.x.esselius.dev` (`local.incus.tls.serverName`).
 - `acme.enable` is set per host. A host cannot decrypt the GoDaddy secret - and therefore cannot
   issue its cert - until its SSH host key is an age recipient (see Playbooks > secrets).
@@ -357,9 +359,10 @@ Then set `local.incus.tls.acme.enable = true;` on any host whose key is a recipi
 The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for clients to reach it;
 DNS-01 validation itself needs no inbound access.
 
-Client certs are trusted declaratively via the preseed `certificates` list. The repo already enrols
-the browser-generated UI cert (`certs/incus-ui-localho.st.crt` ->
-`clientCertificates."incus-ui-localho.st"`). For the `incus` CLI, either add the Mac's client cert
+Client certs are trusted declaratively by the `incus-trust-clients` oneshot (idempotent, since incus
+preseed's `certificates` list is create-only). The repo already enrols the browser-generated UI cert
+(`certs/incus-ui-localho.st.crt` -> `clientCertificates."incus-ui-localho.st"`). For the `incus`
+CLI, either add the Mac's client cert
 the same way (run any `incus` command once to generate `~/.config/incus/client.crt`, commit it under
 `certs/`, and add it to `clientCertificates`), or use a one-time join token (`incus config trust
 add`). Then:

@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
@@ -87,10 +88,36 @@ in
       "LEGO_DNS_PROPAGATION_DISABLE_RNS=true"
     ];
 
-    local.incus.spec.certificates = lib.mapAttrsToList (name: cert: {
-      inherit name;
-      type = "client";
-      certificate = builtins.readFile cert;
-    }) cfg.clientCertificates;
+    # Trust client certs idempotently. incus preseed's `certificates` list is
+    # create-only and errors with "Certificate already in trust store" on the
+    # re-runs triggered whenever incus.service restarts (incus-preseed is
+    # partOf it), so ensure them here instead. Names must be unique.
+    systemd.services.incus-trust-clients = lib.mkIf (cfg.clientCertificates != { }) {
+      description = "Ensure configured incus client certificates are trusted";
+      after = [ "incus.service" ];
+      requires = [ "incus.service" ];
+      partOf = [ "incus.service" ];
+      wantedBy = [ "incus.service" ];
+      path = [
+        config.virtualisation.incus.clientPackage
+        pkgs.coreutils
+        pkgs.gnugrep
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        set -euo pipefail
+        trusted="$(incus config trust list --format csv | cut -d, -f1)"
+      ''
+      + lib.concatMapStrings (entry: ''
+        if printf '%s\n' "$trusted" | grep -qxF ${lib.escapeShellArg entry.name}; then
+          echo "already trusted: ${entry.name}"
+        else
+          incus config trust add-certificate ${entry.cert} --name ${lib.escapeShellArg entry.name}
+        fi
+      '') (lib.mapAttrsToList (name: cert: { inherit name cert; }) cfg.clientCertificates);
+    };
   };
 }
