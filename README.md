@@ -162,6 +162,10 @@ empty. Several non-obvious things had to be fixed empirically:
 
 ## Playbooks
 
+`root@<pi-ip>` below always refers to the bootstrap installer (which allows root SSH - required by
+`nixos-anywhere` itself). Once a main system (`rpi5-8gb`/`rpi5-4gb`) is actually running, root SSH
+is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollback" below).
+
 ### Install / hard reset (wipes NVMe, from the Mac)
 
 ```bash
@@ -196,9 +200,12 @@ This replaces the old manual chroot + `nixos-enter` dance entirely for this case
 
 ### Update + rollback
 
+Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `hosts/pi5-common.nix`)
+- day-to-day access is via `admin` (passwordless `sudo`):
+
 ```bash
 nix flake update          # deliberate bumps only
-nixos-rebuild switch --flake .#rpi5-8gb --target-host root@<pi-ip>
+nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<pi-ip> --sudo
 ```
 
 Rollback after a bad update: choose the previous generation at the U-Boot prompt (extlinux menu, SD
