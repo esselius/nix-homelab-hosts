@@ -36,8 +36,9 @@
       done
       mkdir -p /btrfs_tmp
       mount /dev/disk/by-partlabel/NVME_ROOT /btrfs_tmp
-      if [ -d /btrfs_tmp/@root ]; then
-        btrfs subvolume delete -r /btrfs_tmp/@root
+      if [ -e /btrfs_tmp/@root ]; then
+        btrfs property set /btrfs_tmp/@root ro false 2>/dev/null || true
+        btrfs subvolume delete /btrfs_tmp/@root
       fi
       btrfs subvolume create /btrfs_tmp/@root
       umount /btrfs_tmp
