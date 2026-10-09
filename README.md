@@ -275,7 +275,7 @@ Confirmed working on real hardware (8 GB board):
 ## Known risks
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
-  reboot). Any new service gets reviewed against `modules/impermanence-persist.nix`'s persist list.
+  reboot). Any new service gets reviewed against `modules/storage.nix`'s persist list.
 - NVMe adapter/EEPROM quirks exist for some M.2 hats (nvmd/nixos-raspberrypi #117) - only relevant
   to a future NVMe-boot path; irrelevant to the current SD-boot design.
 - Power: 27 W USB-C PSU + active cooling required for incus-sustained load on either board.

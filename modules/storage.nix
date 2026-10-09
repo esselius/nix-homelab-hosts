@@ -31,14 +31,10 @@
       mount -o nodiscard /dev/disk/by-partlabel/NVME_ROOT /btrfs_tmp
       if [ -e /btrfs_tmp/@root ]; then
         btrfs property set /btrfs_tmp/@root ro false 2>/dev/null || true
-        # systemd auto-creates nested subvolumes under / on first boot
-        # (srv, var/lib/portables, var/lib/machines, tmp, var/tmp) - a
-        # plain `btrfs subvolume delete @root` fails with "Directory not
-        # empty" because of these; they must be deleted first. Initrd has
-        # no awk and its shell doesn't reliably support bash array syntax
-        # or process substitution - a version using either hung the whole
-        # boot rather than failing cleanly, so this is a POSIX `while read`
-        # loop against a temp file instead.
+        # Deletes nested subvolumes systemd creates under / before deleting
+        # @root itself; POSIX `while read`, no awk/arrays/process
+        # substitution (none reliable in initrd). See README "Root-wipe
+        # mechanics" for why.
         btrfs subvolume list -o /btrfs_tmp/@root > /btrfs_tmp/children.txt
         while read -r line; do
           sv="''${line##* }"
