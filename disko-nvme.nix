@@ -16,19 +16,19 @@
             subvolumes = {
               "@root" = {
                 mountpoint = "/";
-                mountOptions = [ "subvol=@root" "noatime" "compress=zstd" "nodiscard" ];
+                mountOptions = [ "noatime" "compress=zstd" "nodiscard" ];
               };
               "@nix" = {
                 mountpoint = "/nix";
-                mountOptions = [ "subvol=@nix" "noatime" "compress=zstd" "nodiscard" ];
+                mountOptions = [ "noatime" "compress=zstd" "nodiscard" ];
               };
               "@persist" = {
                 mountpoint = "/persist";
-                mountOptions = [ "subvol=@persist" "noatime" "compress=zstd" "nodiscard" ];
+                mountOptions = [ "noatime" "compress=zstd" "nodiscard" ];
               };
               "@snapshots" = {
                 mountpoint = "/snapshots";
-                mountOptions = [ "subvol=@snapshots" "noatime" "compress=zstd" "nodiscard" ];
+                mountOptions = [ "noatime" "compress=zstd" "nodiscard" ];
               };
             };
           };
