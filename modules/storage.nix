@@ -86,4 +86,21 @@
     TIMELINE_LIMIT_DAILY = "7";
     TIMELINE_LIMIT_MONTHLY = "3";
   };
+
+  # snapper stores snapshots in <SUBVOLUME>/.snapshots, and that path has to be
+  # a subvolume (otherwise snapshots nest inside @persist and recurse); the
+  # nixpkgs snapper module writes the config but never creates it, so on a
+  # fresh install snapper-timeline fails ("open failed path:/persist/.snapshots").
+  # Reuse the dedicated @snapshots subvolume (mounted at /snapshots) by
+  # bind-mounting it at /persist/.snapshots: the tool's required path becomes
+  # the dedicated subvolume, and /snapshots keeps its clean top-level path.
+  fileSystems."/persist/.snapshots" = {
+    device = "/snapshots";
+    fsType = "none";
+    options = [
+      "bind"
+      "x-systemd.requires-mounts-for=/persist"
+      "x-systemd.requires-mounts-for=/snapshots"
+    ];
+  };
 }
