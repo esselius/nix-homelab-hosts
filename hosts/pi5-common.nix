@@ -18,6 +18,25 @@ in
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  nix.settings.trusted-users = [ "root" "@wheel" ];
+
+  nix.gc = {
+    automatic = true;
+    dates = "weekly";
+    options = "--delete-older-than 14d";
+  };
+  nix.optimise = {
+    automatic = true;
+    dates = [ "weekly" ];
+  };
+
+  time.timeZone = "UTC";
+
+  zramSwap = {
+    enable = true;
+    algorithm = "zstd";
+    memoryPercent = 50;
+  };
 
   hardware.raspberry-pi.firmware = {
     enable = true;
@@ -30,11 +49,6 @@ in
   networking.nftables.enable = true;
   networking.firewall.trustedInterfaces = [ "incusbr0" ];
   networking.firewall.allowedTCPPorts = [ 22 8443 ];
-
-  zramSwap = {
-    enable = true;
-    algorithm = "zstd";
-  };
 
   services.btrfs.autoScrub = {
     enable = true;

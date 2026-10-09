@@ -1,5 +1,8 @@
 { inputs, config, pkgs, lib, ... }:
 
+let
+  sshPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMdasDSm/XlOpv15asMENnQ/E9W9rXExBcUAVd/G6Mo";
+in
 {
   imports = [
     ../lib/sd-image.nix
@@ -94,12 +97,10 @@
     isNormalUser = true;
     description = "admin";
     extraGroups = [ "wheel" ];
-    openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMdasDSm/XlOpv15asMENnQ/E9W9rXExBcUAVd/G6Mo" ];
+    openssh.authorizedKeys.keys = [ sshPublicKey ];
   };
 
-  users.users.root.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMdasDSm/XlOpv15asMENnQ/E9W9rXExBcUAVd/G6Mo"
-  ];
+  users.users.root.openssh.authorizedKeys.keys = [ sshPublicKey ];
 
   environment.systemPackages = with pkgs; [ vim ];
 
