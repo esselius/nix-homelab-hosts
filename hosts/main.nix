@@ -38,11 +38,12 @@
       mount /dev/disk/by-partlabel/NVME_ROOT /btrfs_tmp
       if [ -e /btrfs_tmp/@root ]; then
         btrfs property set /btrfs_tmp/@root ro false 2>/dev/null || true
-        while read -r -a cols; do
-          sv="''${cols[*]: -1}"
+        btrfs subvolume list -o /btrfs_tmp/@root > /btrfs_tmp/children.txt
+        while read -r line; do
+          sv="''${line##* }"
           btrfs property set "/btrfs_tmp/$sv" ro false 2>/dev/null || true
           btrfs subvolume delete "/btrfs_tmp/$sv"
-        done < <(btrfs subvolume list -o /btrfs_tmp/@root)
+        done < /btrfs_tmp/children.txt
         btrfs subvolume delete /btrfs_tmp/@root
       fi
       btrfs subvolume create /btrfs_tmp/@root
