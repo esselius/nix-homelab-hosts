@@ -13,12 +13,14 @@
     device = "/dev/disk/by-label/NIXOS_BOOT";
     fsType = "ext4";
     options = [ "noatime" ];
+    neededForBoot = true;
   };
 
   fileSystems."/boot/firmware" = {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
     options = [ "nofail" ];
+    neededForBoot = true;
   };
 
   boot.initrd.systemd.services.root-wipe = {

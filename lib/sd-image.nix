@@ -64,25 +64,25 @@ in
     rootPartitionUUID = mkOption {
       type = types.nullOr types.str;
       default = null;
-      description = "UUID for the filesystem on the rescue (ext4) partition.";
+      description = "UUID for the filesystem on the rescue (ext4) partition (partition 3).";
     };
 
     rootVolumeLabel = mkOption {
       type = types.str;
       default = "NIXOS_RESCUE";
-      description = "Label for the rescue root ext4 volume (partition 2).";
+      description = "Label for the rescue root ext4 volume (partition 3).";
     };
 
     bootPartitionUUID = mkOption {
       type = types.nullOr types.str;
       default = null;
-      description = "UUID for the ext4 filesystem on the main /boot partition (partition 3).";
+      description = "UUID for the ext4 filesystem on the main /boot partition (partition 2).";
     };
 
     bootVolumeLabel = mkOption {
       type = types.str;
       default = "NIXOS_BOOT";
-      description = "Label for the main /boot ext4 volume (partition 3).";
+      description = "Label for the main /boot ext4 volume (partition 2).";
     };
 
     bootSize = mkOption {
@@ -187,9 +187,7 @@ in
       };
     };
 
-    sdImage.storePaths = [ config.system.build.toplevel ];
-
-    image.extension = if config.sdImage.compressImage then "img.zst" else "img";
+    sdImage.storePaths = [ config.system.build.toplevel ];    image.extension = if config.sdImage.compressImage then "img.zst" else "img";
     image.filePath = "sd-image/${config.image.fileName}";
     system.build.image = config.system.build.sdImage;
     system.build.sdImage = pkgs.callPackage (
@@ -241,9 +239,10 @@ in
           bootSectors=$(( ${toString config.sdImage.bootSize} * 2048 ))
           rootSizeBlocks=$(du -B 512 --apparent-size $root_fs | awk '{ print $1 }')
           rootAlignedBlocks=$(( (rootSizeBlocks + 2047) / 2048 * 2048 ))
+          bootAlignedBlocks=$(( ${toString config.sdImage.bootSize} * 2048 ))
           p2Start=$(( gapSectors + fwSectors ))
-          p3Start=$(( p2Start + rootAlignedBlocks ))
-          imageSizeBlocks=$(( p3Start + bootSectors + 2048 ))
+          p3Start=$(( p2Start + bootAlignedBlocks ))
+          imageSizeBlocks=$(( p3Start + rootAlignedBlocks + 2048 ))
           truncate -s $(( imageSizeBlocks * 512 )) $img
 
           sfdisk --no-reread --no-tell-kernel $img <<EOF
@@ -251,11 +250,11 @@ in
               label-id: ${config.sdImage.firmwarePartitionID}
 
               start=''${gapSectors}, size=''${fwSectors}, type=b
-              start=''${p2Start}, size=''${rootAlignedBlocks}, type=83, bootable
-              start=''${p3Start}, size=''${bootSectors}, type=83, bootable
+              start=''${p2Start}, size=''${bootAlignedBlocks}, type=83, bootable
+              start=''${p3Start}, size=''${rootAlignedBlocks}, type=83, bootable
           EOF
 
-          eval $(partx $img -o START,SECTORS --nr 2 --pairs)
+          eval $(partx $img -o START,SECTORS --nr 3 --pairs)
           dd conv=notrunc if=$root_fs of=$img seek=$START count=$SECTORS
 
           eval $(partx $img -o START,SECTORS --nr 1 --pairs)
@@ -277,7 +276,7 @@ in
           fsck.vfat -vn firmware_part.img
           dd conv=notrunc if=firmware_part.img of=$img seek=$START count=$SECTORS
 
-          eval $(partx $img -o START,SECTORS --nr 3 --pairs)
+          eval $(partx $img -o START,SECTORS --nr 2 --pairs)
           truncate -s $(( SECTORS * 512 )) boot_part.img
           mkdir boot-fs
           ${config.sdImage.populateBootCommands}
