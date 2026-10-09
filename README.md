@@ -220,8 +220,8 @@ so a browser warns and connecting via LAN IP is a name mismatch regardless of tr
 - lego's GoDaddy DNS-01 propagation check queries recursive resolvers, which can serve a *previous*
   challenge TXT for the full record TTL (~600s) even after GoDaddy's authoritative NS has the new
   value, causing a timeout. The daemon sets `LEGO_DNS_PROPAGATION_DISABLE_RNS=true` (a lego env flag
-  incusd's children inherit) so only authoritative NS are checked. incus hardcodes
-  `GODADDY_PROPAGATION_TIMEOUT=300`, so that is not tunable from here.
+  incusd's children inherit) so only authoritative NS are checked. `GODADDY_PROPAGATION_TIMEOUT=300`
+  (lego's own default) is pinned in the daemon env for visibility, not in the sops secret.
 - `sops-nix` with `age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ]` and
   `useSystemdActivation = true`. The decryption unit runs before `sysinit.target`, so
   `/run/secrets/godaddy_acme` always exists before `incus.service` starts.

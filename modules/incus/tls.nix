@@ -68,18 +68,24 @@ in
 
     # lego reads the GoDaddy creds from the daemon's environment.
     systemd.services.incus.serviceConfig.EnvironmentFile =
-      lib.mkIf cfg.acme.enable config.sops.secrets.${cfg.acme.sopsSecret}.path;
+      lib.mkIf cfg.acme.enable
+        config.sops.secrets.${cfg.acme.sopsSecret}.path;
 
+    # Non-secret lego tuning (the credentials come from the EnvironmentFile
+    # above; note EnvironmentFile= settings win over Environment=).
+    #
     # Root cause of the first failed issuance (verified on hardware): GoDaddy
     # recursive caches keep serving a *previous* challenge TXT for the full
     # record TTL (~600s) - longer than lego's window - even after GoDaddy's
     # authoritative NS serves the new value, so lego's recursive-nameserver
-    # check times out. incus hardcodes GODADDY_PROPAGATION_TIMEOUT=300 for the
-    # lego child, so widening it from here has no effect; disabling the
-    # recursive check instead (a lego flag, passed via the env that incusd's
-    # children inherit) makes issuance succeed in ~45s.
-    systemd.services.incus.serviceConfig.Environment =
-      lib.mkIf cfg.acme.enable [ "LEGO_DNS_PROPAGATION_DISABLE_RNS=true" ];
+    # check times out. Disabling the recursive check (a lego flag, passed via
+    # the env incusd's children inherit) makes issuance succeed in ~45s.
+    # GODADDY_PROPAGATION_TIMEOUT=300 matches lego's own default, pinned here
+    # for visibility rather than kept in the sops secret.
+    systemd.services.incus.serviceConfig.Environment = lib.mkIf cfg.acme.enable [
+      "GODADDY_PROPAGATION_TIMEOUT=300"
+      "LEGO_DNS_PROPAGATION_DISABLE_RNS=true"
+    ];
 
     local.incus.spec.certificates = lib.mapAttrsToList (name: cert: {
       inherit name;
