@@ -16,9 +16,13 @@
 
   # incusd seeds its own daemon state directly under /persist/var/lib/incus
   # before the preseed step runs, so that path is never empty when the
-  # pool-create step fires - the dir storage pool needs its own separate
-  # leaf. preseed doesn't create this directory itself.
-  systemd.tmpfiles.rules = [ "d /persist/incus-pool 0755 root root -" ];
+  # pool-create step fires - the pool needs its own separate leaf
+  # (/persist/incus-pool) instead. No tmpfiles rule to pre-create that path:
+  # the btrfs driver creates its own subvolume there on first preseed run,
+  # and a pre-existing plain directory at that exact path makes `btrfs
+  # subvolume create` fail with "File exists" (hit this directly when
+  # migrating from the dir driver - fixed by rmdir-ing the leftover plain
+  # directory before letting preseed recreate it as a real subvolume).
 
   virtualisation.incus = {
     enable = true;
@@ -44,7 +48,11 @@
       storage_pools = [
         {
           name = "default";
-          driver = "dir";
+          # btrfs (not dir): /persist/incus-pool already lives on a btrfs
+          # filesystem (@persist), so incus manages it with native
+          # subvolumes - copy-on-write clones for container/VM creation and
+          # efficient native snapshots, instead of plain directory copies.
+          driver = "btrfs";
           config = {
             source = "/persist/incus-pool";
           };

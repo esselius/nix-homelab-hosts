@@ -134,16 +134,24 @@ empty. Several non-obvious things had to be fixed empirically:
 
 - `virtualisation.incus`, `pkgs.incus-lts`, `ui.enable = true`.
 - `networking.nftables.enable = true` (module assertion; iptables is unsupported).
-- Preseed: `incusbr0` NAT bridge, `default` profile, `dir` storage pool sourced at
+- Preseed: `incusbr0` NAT bridge, `default` profile, `btrfs` storage pool sourced at
   `/persist/incus-pool` (**not** `/persist/var/lib/incus` - incusd seeds its own daemon state there
   before preseed runs, so that path is never empty when the pool-create step fires; the pool needs
-  its own leaf). A `systemd.tmpfiles.rules` entry pre-creates that directory, since incus's preseed
-  does not create pool source directories itself.
+  its own leaf). No `systemd.tmpfiles.rules` entry pre-creates that directory (used to, when the
+  pool was `dir`-backed) - the `btrfs` driver creates its own subvolume there on first preseed run,
+  and a pre-existing plain directory at that exact path makes `btrfs subvolume create` fail with
+  "File exists".
 - The preseed unit is a one-shot that does **not** re-run automatically if its script changes under
   a `nixos-rebuild switch` (observed directly); if a preseed edit doesn't appear to take effect,
-  `systemctl start incus-preseed` manually once.
+  `systemctl start incus-preseed` manually once. Also does not change an **existing** pool's driver
+  in place (`Error: Storage pool "default" is of type "dir" instead of "btrfs"`) - migrating a live
+  pool between drivers means deleting the old one first (`incus storage delete default`, after
+  removing whatever profile device references it), then letting preseed recreate it fresh.
+- Switched the storage pool driver from `dir` to `btrfs` (`/persist/incus-pool` already lives on a
+  btrfs filesystem): verified on real hardware that container rootfs volumes are genuine CoW
+  subvolumes (`btrfs subvolume show` shows a real `Parent UUID` cloned from the image, not a plain
+  copy) and that `incus snapshot create` works.
 - VM images are qcow2 raw on btrfs: CoW disabled (`chattr +C`) on VM disks.
-- Documented v2 toggle: switch the pool driver to `btrfs` (CoW clones).
 
 ## Decisions ledger (why each piece)
 
@@ -258,9 +266,10 @@ Confirmed working on real hardware (8 GB board):
 - Vendor kernel boots, RP1 (USB + Ethernet) alive, NVMe enumerated on PCIe
 - Full impermanence mount tree (`@root`, `@nix`, `@persist` + binds, `@snapshots`)
 - `nixos-rebuild switch` from macOS, including the declarative FAT refresh (stale DTBs pruned)
-- incus: `incusbr0` bridge + NAT, `default` dir pool, LXC container with working DHCP + egress,
+- incus: `incusbr0` bridge + NAT, `default` btrfs pool (CoW subvolumes verified via `btrfs
+  subvolume show`), LXC container with working DHCP + egress, snapshot create/restore,
   **VM guest (Debian 13 cloud image, 4K-page) booted and reachable via incus-agent** on the 16K-page
-  vendor kernel host, snapshot create/restore
+  vendor kernel host
 - The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
   `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
   exercised by hand several times, not yet scripted
@@ -286,7 +295,6 @@ Confirmed working on real hardware (8 GB board):
 
 - NVMe-only boot once nixpkgs ships U-Boot 2026.10: add NVMe FAT to disko, EEPROM `BOOT_ORDER`
   includes NVMe, retire the SD from daily duty entirely.
-- incus btrfs storage pool driver swap.
 - Re-evaluate mainline kernel once nixos-hardware/nixpkgs settle the Pi 5 DTB story further
   (tracked via nixos-hardware issue #78).
 - WireGuard/tailscale, zigbee passthrough details, secondary hosts at scale - additive.
