@@ -82,7 +82,7 @@
           name = "default";
           driver = "dir";
           config = {
-            source = "/persist/var/lib/incus";
+            source = "/persist/incus-pool";
           };
         }
       ];
