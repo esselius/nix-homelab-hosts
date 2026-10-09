@@ -51,13 +51,13 @@
 
   environment.persistence."/persist" = {
     hideMounts = true;
+    # Deliberately NOT persisted: /etc/nixos and /etc/nix (declarative NixOS
+    # state - a flake checkout doesn't belong in /etc/nixos, and /etc/nix only
+    # holds symlinks into /etc/static), and /root (root's home stays ephemeral).
     directories = [
-      "/etc/nixos"
-      "/etc/nix"
       "/var/lib/nixos"
       "/var/lib/incus"
       "/var/log"
-      "/root"
     ];
     files = [
       "/etc/machine-id"
