@@ -23,8 +23,6 @@
     uboot.enable = true;
   };
 
-  hardware.raspberry-pi.configtxt.deviceTreeOverlays.all = lib.mkForce [ ];
-
   boot.supportedFilesystems = [ "btrfs" ];
 
   services.journald.settings.Journal.Storage = "persistent";
