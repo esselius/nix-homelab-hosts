@@ -87,9 +87,9 @@ taking the bootloader files with it.
 
 This means **every `nixos-anywhere` run must be followed by one manual step**: mount the installed
 system and the SD boot partitions together in a chroot, then run that generation's
-`switch-to-configuration boot` so the bootloader install actually targets the SD. A script for this
-is at `scripts/repair-boot-partition.sh` - it is also the correct fix any time only the SD/bootloader
-side breaks later, without touching the NVMe.
+`switch-to-configuration boot` so the bootloader install actually targets the SD (commands in
+Playbooks below). This has been exercised by hand several times this session; it is not yet wrapped
+in a script - deliberately, until it's been run enough times unattended to trust blindly.
 
 ### Root-wipe mechanics (impermanence)
 
@@ -146,9 +146,21 @@ sudo dd if=pi5-bootstrap.img of=/dev/rdiskX bs=4M status=progress conv=fsync
 # boot the Pi (NVMe attached), then:
 nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb root@<pi-ip>
 
-# REQUIRED follow-up (see "bootloader-install caveat" above) - run from the still-booted
-# installer, or re-boot into it if nixos-anywhere already rebooted the box:
-ssh root@<pi-ip> 'bash -s' < scripts/repair-boot-partition.sh
+# REQUIRED follow-up (see "bootloader-install caveat" above) - nixos-anywhere will have rebooted
+# the Pi back into this same installer (the SD's boot partition is still empty); from there:
+ssh root@<pi-ip> 'bash -s' <<'DANCE'
+set -ex
+mkdir -p /mb /mb/nix /mb/persist /mb/boot/firmware
+mount -o subvol=@root /dev/nvme0n1p1 /mb
+mount -o subvol=@nix /dev/nvme0n1p1 /mb/nix
+mount -o subvol=@persist /dev/nvme0n1p1 /mb/persist
+mount /dev/mmcblk0p2 /mb/boot
+mount /dev/mmcblk0p1 /mb/boot/firmware
+closure=$(ls /mb/nix/store/ | grep 'nixos-system-rpi5' | head -1)
+nixos-enter --root /mb -- "/nix/store/$closure/bin/switch-to-configuration" boot
+sync
+umount /mb/boot/firmware /mb/boot /mb/persist /mb/nix /mb
+DANCE
 ssh root@<pi-ip> reboot
 ```
 
@@ -170,7 +182,7 @@ correctness.
 
 | Symptom | Fix | NVMe impact |
 |---|---|---|
-| SD card / bootloader broken, NVMe fine | `scripts/repair-boot-partition.sh` from any booted installer/rescue environment | none |
+| SD card / bootloader broken, NVMe fine | the mount + `nixos-enter` dance above, no `nixos-anywhere` | none |
 | SD card physically dead or unknown state | reflash `images.rpi5-bootstrap` | none |
 | Want a genuinely clean slate | reflash + re-run `nixos-anywhere` | **wiped** (disko's default mode destroys + recreates) |
 
@@ -194,8 +206,9 @@ Confirmed working on real hardware (8 GB board):
 - incus: `incusbr0` bridge + NAT, `default` dir pool, LXC container with working DHCP + egress,
   **VM guest (Debian 13 cloud image, 4K-page) booted and reachable via incus-agent** on the 16K-page
   vendor kernel host, snapshot create/restore
-- `scripts/repair-boot-partition.sh` dance (mount NVMe subvolumes + SD partitions, `nixos-enter`,
-  `switch-to-configuration boot`) successfully populates the SD boot partition after an install
+- The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
+  `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
+  exercised by hand several times, not yet scripted
 
 Still to re-verify after the partition-layout simplification: the full wipe-cycle test (marker file
 on `/` disappears after reboot, `/persist` marker survives) - the POSIX-safe `root-wipe` rewrite was
