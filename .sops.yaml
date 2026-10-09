@@ -1,0 +1,10 @@
+creation_rules:
+  - path_regex: secrets/.*\.ya?ml$
+    key_groups:
+      - age:
+          # Each Pi's SSH host key, converted to age (ssh-keyscan <ip> | ssh-to-age):
+          - age1d8sutmfp9ew327lp5mnkncqa2y9dan4cfx80dxsdlsd2njzqzaus6wlr3e # 192.168.50.80
+          # - age1... # <the other Pi>
+          # Mac's local SSH key; sops picks ~/.ssh/id_ed25519 up automatically
+          # for local edits (no env var / plugin needed).
+          - age1tc32kf0zh3xtkuu4j6eh9swskyvjlxfxx0q997mgrtl075fn9p8sgy94av # Mac
