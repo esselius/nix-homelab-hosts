@@ -76,20 +76,30 @@ NVMe (the only disk disko / `nixos-anywhere` ever wipes):
 | `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/log` + persistent journald, `/home`, `/root`, git copy of this flake |
 | `@snapshots` | `/snapshots` | snapper-managed (nightly + pre-`nixos-rebuild` hook) |
 
-### The bootloader-install caveat (read this before your first install)
+### The bootloader-install caveat (historical - now fixed, see disko-sd.nix)
 
 `nixos-anywhere`'s install phase only auto-mounts filesystems **disko** declares - it has no flag
-to also mount other filesystems (confirmed via `--help`; no such option exists). Since `disko` in
-this repo only knows about the NVMe disk, the installer's bootloader step writes extlinux files
+to also mount other filesystems (confirmed via `--help`; no such option exists). Originally `disko`
+in this repo only knew about the NVMe disk, so the installer's bootloader step wrote extlinux files
 into a plain directory on the NVMe root (`@root/boot/...`) instead of onto the SD. The generation
-boots once from that path, by luck, and then **impermanence wipes `@root` on the next boot**,
-taking the bootloader files with it.
+booted once from that path, by luck, and then **impermanence wiped `@root` on the next boot**,
+taking the bootloader files with it - requiring a manual chroot + `switch-to-configuration boot`
+dance after every install.
 
-This means **every `nixos-anywhere` run must be followed by one manual step**: mount the installed
-system and the SD boot partitions together in a chroot, then run that generation's
-`switch-to-configuration boot` so the bootloader install actually targets the SD (commands in
-Playbooks below). This has been exercised by hand several times this session; it is not yet wrapped
-in a script - deliberately, until it's been run enough times unattended to trust blindly.
+**Fixed**: `disko-sd.nix` now describes the SD card's existing partitions (FAT `FIRMWARE` + ext4
+`NIXOS_BOOT`) via disko's legacy `table` type (`format = "msdos"`, since the SD uses MBR not GPT).
+This is declared purely for `disko`'s **mount** mode - running
+`nixos-anywhere --flake .#rpi5-8gb --disko-mode mount <host>` now mounts NVMe *and* the SD card
+together automatically, so the bootloader-install step succeeds on its own. Verified end-to-end on
+real hardware: no manual dance needed anymore for either a soft reset (SD reflash, NVMe untouched)
+or deploying onto an existing NVMe install. See Playbooks below.
+
+`disko-sd.nix`'s `table`/`msdos` partitions must **never** be used with disko's default `disko` or
+`format` modes - only `mount`. (disko's `_create` step for the `table` type checks `blkid` and
+skips re-partitioning if a table already exists, but the *nested filesystem* content's own
+`_create` would still unconditionally run `mkfs` - which would destroy the SD's bootstrap content.
+This repo's hosts never run disko in anything but `mount` mode against the SD; only the NVMe disk
+is ever destroyed/recreated, and only when explicitly requested.)
 
 ### Root-wipe mechanics (impermanence)
 
@@ -152,7 +162,7 @@ empty. Several non-obvious things had to be fixed empirically:
 
 ## Playbooks
 
-### Install (once per host, from the Mac)
+### Install / hard reset (wipes NVMe, from the Mac)
 
 ```bash
 nix build .#images.rpi5-bootstrap
@@ -162,27 +172,27 @@ sudo dd if=pi5-bootstrap.img of=/dev/rdiskX bs=4M status=progress conv=fsync
 
 # boot the Pi (NVMe attached), then:
 nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb root@<pi-ip>
-
-# REQUIRED follow-up (see "bootloader-install caveat" above) - nixos-anywhere will have rebooted
-# the Pi back into this same installer (the SD's boot partition is still empty); from there:
-ssh root@<pi-ip> 'bash -s' <<'DANCE'
-set -ex
-mkdir -p /mb /mb/nix /mb/persist /mb/boot/firmware
-mount -o subvol=@root /dev/nvme0n1p1 /mb
-mount -o subvol=@nix /dev/nvme0n1p1 /mb/nix
-mount -o subvol=@persist /dev/nvme0n1p1 /mb/persist
-mount /dev/mmcblk0p2 /mb/boot
-mount /dev/mmcblk0p1 /mb/boot/firmware
-closure=$(ls /mb/nix/store/ | grep 'nixos-system-rpi5' | head -1)
-nixos-enter --root /mb -- "/nix/store/$closure/bin/switch-to-configuration" boot
-sync
-umount /mb/boot/firmware /mb/boot /mb/persist /mb/nix /mb
-DANCE
-ssh root@<pi-ip> reboot
 ```
+
+That's it - no manual follow-up dance needed anymore (see "bootloader-install caveat" above:
+`disko-sd.nix` lets `nixos-anywhere` mount the SD card's existing partitions automatically, so the
+bootloader install step succeeds in the same run and the Pi reboots straight into the real system).
 
 If the Mac build host misbehaves during install, pre-build the disko script + toplevel and pass
 `--store-paths` (nixos-anywhere #18 pattern).
+
+### Soft reset (SD reflash, reuse existing NVMe content - e.g. after a wedged SD/bootloader)
+
+```bash
+# reflash the bootstrap image as above, boot the Pi, then:
+nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb --disko-mode mount root@<pi-ip>
+```
+
+`--disko-mode mount` mounts the *existing* NVMe partitions and the SD card without destroying
+anything, then runs the normal install + bootloader-install phases against them. Verified
+end-to-end on real hardware: NVMe content (incus storage pool, containers, VMs) survives
+untouched, bootloader install succeeds automatically, Pi reboots straight into the working system.
+This replaces the old manual chroot + `nixos-enter` dance entirely for this case too.
 
 ### Update + rollback
 
@@ -199,9 +209,9 @@ correctness.
 
 | Symptom | Fix | NVMe impact |
 |---|---|---|
-| SD card / bootloader broken, NVMe fine | the mount + `nixos-enter` dance above, no `nixos-anywhere` | none |
-| SD card physically dead or unknown state | reflash `images.rpi5-bootstrap` | none |
-| Want a genuinely clean slate | reflash + re-run `nixos-anywhere` | **wiped** (disko's default mode destroys + recreates) |
+| SD card / bootloader broken, NVMe fine | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
+| SD card physically dead or unknown state | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
+| Want a genuinely clean slate | reflash, then **hard reset** above (default `nixos-anywhere`, no `--disko-mode`) | **wiped** (disko's default mode destroys + recreates) |
 
 ### Migration between hosts (offline, no cluster)
 
@@ -229,6 +239,10 @@ Confirmed working on real hardware (8 GB board):
 - Full impermanence wipe-cycle test, post partition-layout-simplification and post
   `root-wipe` `RemainAfterExit` fix: marker file on `/` correctly disappears after reboot,
   `/persist` marker correctly survives, two consecutive clean reboots, zero failed units each time
+- `nixos-anywhere --disko-mode mount` (soft reset, `disko-sd.nix`): mounts NVMe + SD together
+  automatically, bootloader install succeeds with zero manual steps, verified end-to-end on real
+  hardware including a full reboot into the working system afterward - the old manual chroot +
+  `nixos-enter` dance is no longer required for either install path
 
 ## Known risks
 
