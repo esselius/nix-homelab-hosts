@@ -72,7 +72,13 @@ NVMe (the only disk disko / `nixos-anywhere` ever wipes):
 | `@root` | `/` | rolled back to pristine at every boot (impermanence, btrfs recipe - no tmpfs, RAM matters on 4/8 GB) |
 | `@nix` | `/nix` | persists |
 | `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/log` + persistent journald, `/home`, `/root`, git copy of this flake |
-| `@snapshots` | `/snapshots` | snapper-managed (nightly + pre-`nixos-rebuild` hook) |
+| `@snapshots` | `/snapshots` | snapper's snapshot store for `/persist` (also bind-mounted at `/persist/.snapshots` - see note) |
+
+snapper: `services.snapper.configs."persist"` snapshots `/persist` on a nightly timeline
+(`TIMELINE_*`). snapper always stores snapshots in `<SUBVOLUME>/.snapshots` and requires that path to
+be a subvolume (else snapshots nest inside `@persist` and recurse), so `modules/storage.nix`
+bind-mounts the dedicated `@snapshots` subvolume at `/persist/.snapshots` - leaving `/snapshots` as
+the clean top-level path. Without it, `snapper-timeline` fails on a fresh install.
 
 ### The bootloader-install caveat (historical - now fixed, see disko-sd.nix)
 
@@ -132,26 +138,95 @@ empty. Several non-obvious things had to be fixed empirically:
 
 ### incus
 
+Config lives in `modules/incus/`, split by concern. Hosts tune only
+`local.incus.{network,guest,tls}`; each file contributes to an internal `local.incus.spec`, and
+`preseed.nix` is the single place that assembles the freeform `virtualisation.incus.preseed` value
+(this avoids depending on how the freeform submodule merges list attributes defined across separate
+modules).
+
+| File | Concern |
+|------|---------|
+| `default.nix` | enable, `pkgs.incus-lts`, UI, `incus-admin` group; declares the `local.incus.spec` interface |
+| `network.nix` | managed bridge, explicit subnets, optional macvlan profile, firewall |
+| `storage.nix` | btrfs `default` pool at `/persist/incus-pool` |
+| `profiles.nix` | `default`/`container`/`vm` profiles from a per-host RAM budget |
+| `tls.nix` | Let's Encrypt server cert (GoDaddy DNS-01) + trusted client certs |
+| `preseed.nix` | assembles `virtualisation.incus.preseed` |
+
 - `virtualisation.incus`, `pkgs.incus-lts`, `ui.enable = true`.
 - `networking.nftables.enable = true` (module assertion; iptables is unsupported).
-- Preseed: `incusbr0` NAT bridge, `default` profile, `btrfs` storage pool sourced at
-  `/persist/incus-pool` (**not** `/persist/var/lib/incus` - incusd seeds its own daemon state there
-  before preseed runs, so that path is never empty when the pool-create step fires; the pool needs
-  its own leaf). No `systemd.tmpfiles.rules` entry pre-creates that directory (used to, when the
-  pool was `dir`-backed) - the `btrfs` driver creates its own subvolume there on first preseed run,
-  and a pre-existing plain directory at that exact path makes `btrfs subvolume create` fail with
-  "File exists".
+- Storage pool sourced at `/persist/incus-pool` (**not** `/persist/var/lib/incus` - incusd seeds its
+  own daemon state there before preseed runs, so that path is never empty when the pool-create step
+  fires; the pool needs its own leaf). No `systemd.tmpfiles.rules` entry pre-creates that directory
+  (used to, when the pool was `dir`-backed) - the `btrfs` driver creates its own subvolume there on
+  first preseed run, and a pre-existing plain directory at that exact path makes `btrfs subvolume
+  create` fail with "File exists".
 - The preseed unit is a one-shot that does **not** re-run automatically if its script changes under
   a `nixos-rebuild switch` (observed directly); if a preseed edit doesn't appear to take effect,
   `systemctl start incus-preseed` manually once. Also does not change an **existing** pool's driver
   in place (`Error: Storage pool "default" is of type "dir" instead of "btrfs"`) - migrating a live
   pool between drivers means deleting the old one first (`incus storage delete default`, after
   removing whatever profile device references it), then letting preseed recreate it fresh.
-- Switched the storage pool driver from `dir` to `btrfs` (`/persist/incus-pool` already lives on a
-  btrfs filesystem): verified on real hardware that container rootfs volumes are genuine CoW
-  subvolumes (`btrfs subvolume show` shows a real `Parent UUID` cloned from the image, not a plain
-  copy) and that `incus snapshot create` works.
-- VM images are qcow2 raw on btrfs: CoW disabled (`chattr +C`) on VM disks.
+- Storage pool driver is `btrfs` (the pool lives on the `@persist` btrfs filesystem): container
+  rootfs volumes are genuine CoW subvolumes (`btrfs subvolume show` shows a real `Parent UUID`) and
+  `incus snapshot create` works. VM images are qcow2 raw on btrfs with CoW disabled (`chattr +C`).
+
+#### Networking
+
+- Managed bridge `incusbr0`, NAT on both families, with **explicit subnets** rather than `auto`:
+  `rpi5-8gb` = `10.42.0.1/24` + `fd42:0::1/64`, `rpi5-4gb` = `10.42.1.1/24` + `fd42:1::1/64`. Keeps
+  addressing predictable and non-colliding if the pair is ever routed.
+- `incusbr0` is in `networking.firewall.trustedInterfaces`; the API/UI port `8443` is opened.
+- Optional `local.incus.network.macvlan` emits a `lan` profile (`nictype = macvlan`, `parent =
+  eth0`) for instances that should be first-class LAN citizens (own MAC, router DHCP). Apply with
+  `incus launch ... -p default -p lan`; the later profile overrides `default`'s bridged `eth0`
+  (profiles merge by device name). Caveat: the host cannot reach a macvlan guest directly. Confirm
+  the parent NIC on hardware (expected `eth0` on the vendor kernel/DTB).
+
+#### Profiles & resource limits
+
+- `default` carries connectivity + storage only (NIC + root disk), no limits.
+- Limits are separate, limit-only profiles applied alongside `default`: `container` (50% of the
+  host budget, `limits.memory.enforce = hard` - without hard enforcement a runaway container can
+  still OOM the host) and `vm` (75%), both with `limits.cpu` = core count. `vm` is only emitted when
+  `local.incus.guest.vms = true` (the 4 GB board is containers-only).
+- Host budgets (`local.incus.guest.memoryMiB`): `rpi5-8gb` 6144 (~2 GB left for host + zram),
+  `rpi5-4gb` 2560.
+
+#### TLS / remote access
+
+Motivation: incusd's auto-generated cert is self-signed with SANs only for the hostname + loopback,
+so a browser warns and connecting via LAN IP is a name mismatch regardless of trust.
+
+- **Server cert: Let's Encrypt, DNS-01 via GoDaddy**, using incus-native ACME
+  (`acme.domain` / `email` / `challenge = DNS-01` / `provider = godaddy`). DNS-01 needs no inbound
+  reachability and no name resolution on the Pi; the GoDaddy API key/secret live in a sops secret
+  (`godaddy_acme`) injected as `systemd.services.incus.serviceConfig.EnvironmentFile`. Clients still
+  need the name to resolve (A record) to connect.
+- **Client auth: no mTLS and no IdP.** The Mac's incus client cert is trusted declaratively via the
+  preseed `certificates` list (`local.incus.tls.clientCertificates`) - no CA, no join token, no OIDC
+  broker. (Considered and rejected - see decisions ledger.)
+- Names: `rpi5-8gb.x.esselius.dev` / `rpi5-4gb.x.esselius.dev` (`local.incus.tls.serverName`).
+- `acme.enable` is set per host. A host cannot decrypt the GoDaddy secret - and therefore cannot
+  issue its cert - until its SSH host key is an age recipient (see Playbooks > secrets).
+
+#### Secrets (sops)
+
+- Recipients live in `.sops.yaml`: each Pi's SSH host key (`ssh-keyscan <ip> | ssh-to-age`) plus the
+  Mac's on-disk SSH key. sops 3.13.3 does **not** read `~/.ssh/id_ed25519` directly (its SSH
+  fallback is `~/.ssh/id_rsa` only), so the devshell exports
+  `SOPS_AGE_KEY_CMD="ssh-to-age -private-key -i ~/.ssh/id_ed25519"`, deriving a native age identity
+  from the same key. Passphrase-protected SSH keys are unsupported by `agessh`.
+- lego's GoDaddy DNS-01 propagation check queries recursive resolvers, which can serve a *previous*
+  challenge TXT for the full record TTL (~600s) even after GoDaddy's authoritative NS has the new
+  value, causing a timeout. The daemon sets `LEGO_DNS_PROPAGATION_DISABLE_RNS=true` (a lego env flag
+  incusd's children inherit) so only authoritative NS are checked. incus hardcodes
+  `GODADDY_PROPAGATION_TIMEOUT=300`, so that is not tunable from here.
+- `sops-nix` with `age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ]` and
+  `useSystemdActivation = true`. The decryption unit runs before `sysinit.target`, so
+  `/run/secrets/godaddy_acme` always exists before `incus.service` starts.
+- The `godaddy_acme` value is the lego environment file contents: `GODADDY_API_KEY=...` /
+  `GODADDY_API_SECRET=...`.
 
 ## Decisions ledger (why each piece)
 
@@ -165,6 +240,11 @@ empty. Several non-obvious things had to be fixed empirically:
 | Filesystem | btrfs (checksums on write + scrubs; no third-party module ever constrains `nix flake update`) | the RAM lens made this the winner over ZFS for 8/4 GB boards |
 | Install | `nixos-anywhere`, kexec skipped | `VARIANT_ID=installer` on the bootstrap image makes nixos-anywhere's `runKexec()` early-return; kexec on Pi 5 is flaky |
 | Topology | standalone pair, no cluster | 2-member Cowsql/Raft clusters lose quorum on a single node update; container live migration is stop-and-move anyway for real workloads; offline `incus move` covers the need |
+| TLS server cert | Let's Encrypt, DNS-01 via GoDaddy | publicly trusted (no browser warning, no keychain import), no inbound `:80`, no CA to run or rotate; GoDaddy creds held in sops |
+| Client auth | incus client cert trusted via preseed | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires |
+| Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall |
+| Guest memory budget | per-host (6 GiB / 2.5 GiB) | leaves headroom for host + zram on the 8/4 GB boards |
+| Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 
 ## Playbooks
 
@@ -227,6 +307,35 @@ end-to-end on real hardware: NVMe content (incus storage pool, containers, VMs) 
 untouched, bootloader install succeeds automatically, Pi reboots straight into the working system.
 This replaces the old manual chroot + `nixos-enter` dance entirely for this case too.
 
+### Secrets + ACME bootstrap (two-phase)
+
+sops is keyed to each Pi's SSH host key, which only exists after first boot, so a fresh host is
+installed before it can decrypt the GoDaddy secret:
+
+```bash
+# after first boot of a host, add its age recipient:
+nix develop
+ssh admin@<pi-ip> sudo cat /etc/ssh/ssh_host_ed25519_key.pub | ssh-to-age   # -> .sops.yaml
+
+# create / rekey the secret (Mac edits use ~/.ssh/id_ed25519 automatically):
+sops secrets/rpi5.yaml              # godaddy_acme: |
+                                    #   GODADDY_API_KEY=...
+                                    #   GODADDY_API_SECRET=...
+sops updatekeys secrets/rpi5.yaml   # re-run after adding/removing recipients
+```
+
+Then set `local.incus.tls.acme.enable = true;` on any host whose key is a recipient, and rebuild.
+The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for clients to reach it;
+DNS-01 validation itself needs no inbound access.
+
+Mac client certificate: run any `incus` command once to generate `~/.config/incus/client.crt`,
+commit it as `certs/macbook.crt`, and set `local.incus.tls.clientCertificates.macbook` on each host.
+Then:
+
+```bash
+incus remote add rpi5-8gb https://rpi5-8gb.x.esselius.dev:8443
+```
+
 ### Update + rollback
 
 Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `modules/ssh-access.nix`)
@@ -270,6 +379,10 @@ Confirmed working on real hardware (8 GB board):
   subvolume show`), LXC container with working DHCP + egress, snapshot create/restore,
   **VM guest (Debian 13 cloud image, 4K-page) booted and reachable via incus-agent** on the 16K-page
   vendor kernel host
+- incus server certificate: Let's Encrypt via GoDaddy DNS-01, issued in-process by incusd and served
+  on `:8443` (needed `LEGO_DNS_PROPAGATION_DISABLE_RNS` - see TLS section); `acme.domain`/`provider`
+  set through the preseed, creds from the sops `godaddy_acme` EnvironmentFile, `nixos-rebuild
+  switch` from macOS via `--build-host` (host reuses its uncached kernel)
 - The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
   `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
   exercised by hand several times, not yet scripted
@@ -281,6 +394,21 @@ Confirmed working on real hardware (8 GB board):
   hardware including a full reboot into the working system afterward - the old manual chroot +
   `nixos-enter` dance is no longer required for either install path
 
+Pre-flight tested from macOS (not on the Pi):
+
+- sops decrypts `secrets/rpi5.yaml` via the SSH-key-derived age identity (devshell
+  `SOPS_AGE_KEY_CMD`), yielding `GODADDY_API_KEY` / `GODADDY_API_SECRET`
+- GoDaddy DNS-01 against **Let's Encrypt staging**: creds authenticate, the `_acme-challenge`
+  TXT record is written and served by GoDaddy's authoritative NS (and deleted); the only snag was
+  recursive-resolver propagation lag (fixed via `LEGO_DNS_PROPAGATION_DISABLE_RNS`)
+
+Not yet verified on hardware:
+
+- preseed client-cert trust: no client enrolled yet (generate the Mac client cert and set
+  `local.incus.tls.clientCertificates`)
+- the 4 GB host (`rpi5-8gb` is the one exercised so far): needs its SSH key as a sops recipient and
+  `acme.enable = true`
+
 ## Known risks
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
@@ -290,6 +418,11 @@ Confirmed working on real hardware (8 GB board):
 - Power: 27 W USB-C PSU + active cooling required for incus-sustained load on either board.
 - Vendor kernel builds are uncached (no public Hydra jobset for `linux-rpi` yet); a `nix flake
   update` that bumps nixos-hardware can mean a multi-hour local kernel build.
+- sops: a host whose SSH host key is not a recipient in `.sops.yaml` fails secret decryption at
+  boot (so `incus.service` gets no GoDaddy creds and no cert is issued). Adding recipients means
+  re-running `sops updatekeys secrets/rpi5.yaml` from a machine that can already decrypt.
+- ACME: DNS-01 depends on GoDaddy API availability and is subject to Let's Encrypt rate limits. The
+  client still needs an A record for the name to connect; validation itself does not.
 
 ## Future paths (documented, not built)
 
