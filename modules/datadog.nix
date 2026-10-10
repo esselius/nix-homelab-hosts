@@ -46,6 +46,8 @@ in
     enable = true;
     apiKeyFile = config.sops.secrets.datadog_api_key.path;
     hostname = config.networking.hostName;
+    # Live Process collection (process_config.process_collection.enabled).
+    enableLiveProcessCollection = true;
     # The module default is use_mount = "false" (a string), which the disk check
     # cannot unmarshal into bool and refuses to load; pass a real boolean.
     diskCheck = {
