@@ -57,6 +57,33 @@ in
     # The agent defaults run_path to /opt/datadog-agent/run, which does not exist
     # on NixOS, so remote-config and version-history writes fail at startup.
     extraConfig.run_path = "/run/datadog-agent";
+
+    # Scrape Incus's Prometheus metrics (exposed loopback-only by
+    # modules/incus/preseed.nix) through the OpenMetrics check. OpenMetrics is
+    # not one of the module's default integrations, so pull it into the agent's
+    # Python env explicitly. Every scraped series is a Datadog *custom metric*;
+    # `metrics = [ ".*" ]` collects the full documented set.
+    extraIntegrations = lib.mkIf config.local.incus.metrics.enable {
+      openmetrics = (ps: [ ps.prometheus-client ]);
+    };
+    checks = lib.mkIf config.local.incus.metrics.enable {
+      openmetrics = {
+        init_config = { };
+        instances = [
+          {
+            # The metrics listener is HTTPS; the cert is Incus's own
+            # (self-signed unless ACME is on), so skip verification on loopback.
+            openmetrics_endpoint = "https://${config.local.incus.metrics.address}/1.0/metrics";
+            namespace = "incus";
+            # Strip the raw prefix so the namespace does not double it:
+            # incus_cpu_seconds_total -> incus.cpu_seconds.count.
+            raw_metric_prefix = "incus_";
+            tls_verify = false;
+            metrics = [ ".*" ];
+          }
+        ];
+      };
+    };
   };
 
   # dogstatsd tries a unixgram socket under /var/run/datadog as well as UDP, and

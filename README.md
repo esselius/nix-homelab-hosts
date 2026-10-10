@@ -335,6 +335,26 @@ extra needs persisting and the agent re-registers cleanly after an impermanence 
 collection is on (`enableLiveProcessCollection`, i.e. `process_config.process_collection.enabled`),
 which the module runs as the `datadog-process-agent` unit.
 
+Incus's own per-instance metrics (CPU/memory/disk/network/filesystem/process, plus project and
+daemon metrics) are scraped via Datadog's **OpenMetrics check**. `modules/incus/preseed.nix`
+(`local.incus.metrics`) exposes Incus's `/1.0/metrics` on a loopback-only listener
+(`core.metrics_address = 127.0.0.1:9100`, `core.metrics_authentication = false`); the listener is
+HTTPS with Incus's own certificate, so the check disables TLS verification and never leaves the
+host, meaning no firewall change and no metrics client cert. `modules/datadog.nix` adds the
+`openmetrics` integration to the agent's Python env (it is not a module default) and a check that
+sets `namespace = incus` with `raw_metric_prefix = incus_`, so `incus_cpu_seconds_total` lands as
+`incus.cpu_seconds.count` (counters ending in `_total` are requested without the suffix and
+submitted with `.count`, per Datadog's OpenMetrics convention). `metrics = [ ".*" ]` collects the
+full documented set; the toggle `local.incus.metrics.enable` (default `true`) also gates the
+listener, so the two stay in sync.
+
+**Cost caveat:** every series the OpenMetrics check emits is a Datadog **custom metric**. Datadog's
+Free plan has no custom-metric allotment (allotments are Pro: 100/host, Enterprise: 200/host; and
+metering is defined over paid hosts), so the `incus.*` series require a paid plan - only the host's
+own standard metrics are covered for free. The `metrics = [ ".*" ]` set is also the highest-volume
+option (per-CPU/device/instance labels plus `incus_go_*` internals), so on a paid plan watch the
+custom-metrics usage and narrow the list if needed.
+
 Three upstream rough edges are worked around in the module, each with a comment there:
 
 - **Build**: `integrations-core` names its Python dists `datadog-checks-base` / `datadog-disk` / ...
@@ -370,6 +390,7 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
+| Incus metrics | OpenMetrics check against a loopback-only, unauthenticated Incus `/1.0/metrics` | no firewall hole, no metrics client cert; runs only where Incus already has local access. These are custom metrics, so they need a paid Datadog plan (Free has no custom-metric allotment) |
 
 ## Playbooks
 
