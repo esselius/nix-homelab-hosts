@@ -559,6 +559,10 @@ Not yet verified on hardware:
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
   reboot). Any new service gets reviewed against `modules/storage.nix`'s persist list.
+- Every host eval prints disko's "The legacy table is outdated..." warning: `disko-sd.nix`
+  necessarily uses disko's legacy `table`/`msdos` type for the MBR SD card (disko's new `gpt` type is
+  GPT-only and partlabel-addressed, so it can't describe this disk). It is mount-only and harmless
+  (disko #812 - no way to silence just this warning; `nix --quiet flake check` hides it).
 - NVMe adapter/EEPROM quirks exist for some M.2 hats (nvmd/nixos-raspberrypi #117) - only relevant
   to a future NVMe-boot path; irrelevant to the current SD-boot design.
 - Power: 27 W USB-C PSU + active cooling required for incus-sustained load on either board.

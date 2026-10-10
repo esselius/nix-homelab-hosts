@@ -22,6 +22,15 @@
   # the documented hard-reset playbook (no `--disko-mode` flag, default mode)
   # would otherwise wipe the SD card too, since default mode destroys *every*
   # disk declared in disko.devices, not just the one being targeted for reuse.
+  #
+  # EXPECTED WARNING: evaluating any host prints disko's "The legacy table is
+  # outdated..." warning for this disk. It cannot be avoided: disko offers only
+  # two partition-table types (`table`, which supports msdos, and `gpt`), the SD
+  # card is MBR/msdos, and the new `gpt` type addresses partitions by GPT
+  # partlabels, so it cannot describe this disk. The warning's stated caveat
+  # (duplicate option definitions) only bites disko's create mode - this disk is
+  # mount-only (see above). disko has no way to silence just this warning
+  # (nix-community/disko#812); `nix --quiet flake check` hides it with the rest.
   disko.devices.disk.sd = {
     type = "disk";
     device = "/dev/mmcblk0";
