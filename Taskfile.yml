@@ -1,0 +1,90 @@
+version: '3'
+
+# Deploy/ops entry points, mirroring the README "Playbooks". Override the vars
+# per invocation, e.g. `task deploy HOST=rpi5-4gb IP=192.168.50.81`.
+vars:
+  FLAKE: '.'
+  HOST: 'rpi5-8gb'
+  IP: '192.168.50.80'
+  ADMIN: 'admin'
+  BOOTSTRAP_IMAGE: 'pi5-bootstrap.img'
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  deploy:
+    desc: 'Update the running host (builds on-target, then switches)'
+    cmds:
+      - >-
+        nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}}
+        --target-host {{.ADMIN}}@{{.IP}} --build-host {{.ADMIN}}@{{.IP}} --sudo
+
+  install:
+    desc: 'HARD reset: nixos-anywhere full install (WIPES the NVMe)'
+    cmds:
+      - nix run github:nix-community/nixos-anywhere -- --flake {{.FLAKE}}#{{.HOST}} root@{{.IP}}
+
+  install:mount:
+    desc: 'SOFT reset: nixos-anywhere --disko-mode mount (NVMe content preserved)'
+    cmds:
+      - >-
+        nix run github:nix-community/nixos-anywhere --
+        --flake {{.FLAKE}}#{{.HOST}} --disko-mode mount root@{{.IP}}
+
+  bootstrap:
+    desc: Build the bootstrap SD image and decompress it to {{.BOOTSTRAP_IMAGE}}
+    cmds:
+      - nix build {{.FLAKE}}#images.rpi5-bootstrap
+      - zstd -d -f ./result/sd-image/*.img.zst -o {{.BOOTSTRAP_IMAGE}}
+
+  flash:
+    desc: 'Write {{.BOOTSTRAP_IMAGE}} to a raw disk, e.g. task flash DISK=/dev/rdisk4'
+    requires:
+      vars: [DISK]
+    preconditions:
+      - sh: test -f {{.BOOTSTRAP_IMAGE}}
+        msg: '{{.BOOTSTRAP_IMAGE}} not found - run `task bootstrap` first'
+    cmds:
+      - diskutil unmountDisk {{.DISK}}
+      - sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4M status=progress conv=fsync
+
+  ssh:
+    desc: SSH into the running host
+    cmds:
+      - ssh {{.ADMIN}}@{{.IP}}
+
+  eval:
+    desc: 'Evaluate a config path, e.g. task eval PATH=networking.hostName'
+    requires:
+      vars: [PATH]
+    cmds:
+      - nix eval --json '{{.FLAKE}}#nixosConfigurations.{{.HOST}}.config.{{.PATH}}'
+
+  update:
+    desc: Deliberately bump flake inputs
+    cmds:
+      - nix flake update
+
+  check:
+    desc: Evaluate every host and run the formatting gate
+    cmds:
+      - nix flake check
+
+  fmt:
+    desc: Format Nix files
+    cmds:
+      - nix fmt
+
+  secrets:edit:
+    desc: Edit secrets/rpi5.yaml (devshell provides the age identity)
+    cmds:
+      - nix develop {{.FLAKE}} -c sops secrets/rpi5.yaml
+
+  secrets:updatekeys:
+    desc: Re-key secrets/rpi5.yaml after adding/removing recipients
+    cmds:
+      - nix develop {{.FLAKE}} -c sops updatekeys secrets/rpi5.yaml

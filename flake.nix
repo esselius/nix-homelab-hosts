@@ -47,6 +47,7 @@
         ./modules/nix-settings.nix
         ./modules/ssh-access.nix
         ./modules/zram.nix
+        ./modules/wireguard.nix
         ./modules/incus
         ./modules/sops.nix
         ./modules/datadog.nix
@@ -80,6 +81,8 @@
             pkgs.age
             # Convert each Pi's SSH host key into an age recipient.
             pkgs.ssh-to-age
+            # Derive/verify WireGuard public keys (`wg pubkey`) and inspect peers.
+            pkgs.wireguard-tools
             pkgs.opencode
           ];
 

@@ -142,7 +142,8 @@ Config lives in `modules/incus/`, split by concern. Hosts tune only
 `local.incus.{network,guest,tls}`; each file contributes to an internal `local.incus.spec`, and
 `preseed.nix` is the single place that assembles the freeform `virtualisation.incus.preseed` value
 (this avoids depending on how the freeform submodule merges list attributes defined across separate
-modules).
+modules). Host networking for the VPN lives outside this directory, in `modules/wireguard.nix`,
+tuned via `local.wireguard` - see "WireGuard VPN" below.
 
 | File | Concern |
 |------|---------|
@@ -176,12 +177,15 @@ modules).
 - Managed bridge `incusbr0`, NAT on both families, with **explicit subnets** rather than `auto`:
   `rpi5-8gb` = `10.42.0.1/24` + `fd42:0::1/64`, `rpi5-4gb` = `10.42.1.1/24` + `fd42:1::1/64`. Keeps
   addressing predictable and non-colliding if the pair is ever routed.
+- A second, NAT-less bridge `incusbr-vpn` carries instances that must be reachable from other
+  WireGuard VPN clients - see "WireGuard VPN" below.
 - `incusbr0` is in `networking.firewall.trustedInterfaces`; the API/UI port `8443` is opened.
 - Optional `local.incus.network.macvlan` emits a `lan` profile (`nictype = macvlan`, `parent =
-  eth0`) for instances that should be first-class LAN citizens (own MAC, router DHCP). Apply with
+  end0`) for instances that should be first-class LAN citizens (own MAC, router DHCP). Apply with
   `incus launch ... -p default -p lan`; the later profile overrides `default`'s bridged `eth0`
-  (profiles merge by device name). Caveat: the host cannot reach a macvlan guest directly. Confirm
-  the parent NIC on hardware (expected `eth0` on the vendor kernel/DTB).
+  NIC device (profiles merge by device name). Caveat: the host cannot reach a macvlan guest
+  directly. Here `parent` is the *host* uplink, which is `end0` on the Pi 5 vendor kernel/DTB
+  (`wld0` is wireless) - **not** `eth0`; confirm per board.
 
 #### Profiles & resource limits
 
@@ -231,6 +235,92 @@ so a browser warns and connecting via LAN IP is a name mismatch regardless of tr
   `GODADDY_API_SECRET=...`.
 - `datadog_api_key` is the single-line Datadog API key consumed by the agent's `apiKeyFile` (see
   Monitoring below).
+- `wg_private_key` is `rpi5-8gb`'s base64 WireGuard private key (read by `modules/wireguard.nix`).
+  Its public key (`wg pubkey`) must be configured on the router - see "WireGuard VPN".
+
+### WireGuard VPN (ASUS router server, Pis as split-tunnel nodes)
+
+The router is an ASUS running its own WireGuard VPN server (VPN Fusion); each Pi joins as a
+**split-tunnel node**, not a road-warrior client. `modules/wireguard.nix` (host-tuned via
+`local.wireguard`) brings up `wg0` with the Pi's
+tunnel address, a single peer (the router), `persistentKeepalive = 25` (so the server can always
+push packets back through the Pi's home NAT), and `allowedIPs = 10.6.0.0/24` - the VPN subnet only.
+Deliberately *not* `0.0.0.0/0`: a default route via `wg0` would drag all of the host's and its
+instances' traffic through the router, whereas the split tunnel still reaches every VPN client and
+lets instance reply traffic return to them. The private key is the sops secret `wg_private_key`;
+`wg0` is a firewall-trusted interface and `net.ipv4.ip_forward` is enabled.
+
+#### VPN-reachable instances
+
+A separate managed bridge `incusbr-vpn` (`10.43.0.1/24`, IPv4-only) carries instances that other VPN
+clients must reach. It is applied with the `vpn` profile, stacking on `default` exactly like `lan`
+(`incus launch ... -p default -p vpn`), which overrides `default`'s bridged `eth0` onto the VPN
+bridge; `incusbr0`/`default` are unchanged for non-exposed workloads. The VPN bridge is IPv4-only
+(`ipv6.address = "none"` and the masquerade table is family `ip`), so IPv6 is out of scope until
+someone adds it deliberately.
+
+The bridge is created with **`ipv4.nat = false`**, which is the non-obvious part. An incus bridge
+with NAT masquerades instance traffic leaving via *any* non-bridge interface - including `wg0` - so
+instance source IPs would be rewritten on the VPN path and inbound VPN-client -> instance
+connections would break (the incus docs confirm NAT preserves source addresses only *between
+managed bridges*). With NAT off, a host nftables rule supplies internet egress scoped to the uplink
+only:
+
+```
+ip saddr 10.43.0.0/24 oifname "end0" masquerade
+```
+
+so the VPN path keeps real instance source IPs while instances still reach the internet. The uplink
+is `end0` on the Pi 5 vendor kernel/DTB (there is no `eth0`); if `local.incus.network.vpn.uplink`
+does not match the real uplink the rule never matches and VPN-bridge instances lose internet egress
+(they can still reach each other and the host).
+
+**Required router-side config (ASUS WireGuard VPN server)** - outside this repo, and constrained to
+what the ASUS WebUI actually exposes. The Pi's profile is set up as ASUS's site-to-site **scenario 3
+("two-way communication")** (ASUS FAQ 1048281). In **VPN > VPN Server > WireGuard VPN**, open the
+profile created for this host and set:
+
+- **Access intranet**: Enable.
+- **Allow IPs (Server)**: `<pi-wg-address>/32, 10.43.0.0/24` - for `rpi5-8gb`,
+  `10.6.0.3/32, 10.43.0.0/24`. The ASUS default is just the peer `/32`; adding the incus subnet is
+  the same edit the ASUS guide makes when it appends the client LAN
+  (`10.6.0.2/32,192.168.100.0/24`). The server needs it to reach instances *and* to accept their
+  return packets. **This is the one edit that matters.**
+- **Allow IPs (Client)**: keep the default `0.0.0.0/0`, which already routes `10.43.0.0/24` into the
+  tunnel for every exported client profile. The ASUS UI exposes only this **one global**
+  client-AllowedIPs field (no per-client split tunnel), so don't narrow it.
+- **Enable NAT**: the default (enabled) is fine - the client -> instance path is routed straight into
+  the tunnel, not NATed through the router. (Disabling it, as scenario 3 does, would let instances
+  see the client's real WG address instead of the router's, but also stops clients tunnelling their
+  internet through the router - choose per need.)
+
+Settings the ASUS UI does **not** expose - and this design does not need - are a per-peer server
+AllowedIPs beyond **Allow IPs (Server)**, the server's own tunnel subnet, MTU, or per-peer
+forwarding toggles. A pre-shared key is optional under **Advanced Settings** (off by default; this
+repo configures none - if you enable it, the exported `PresharedKey` must also be added to the Pi's
+peer).
+
+Without the **Allow IPs (Server)** entry a VPN client reaches the Pi's wg address but not its
+instances.
+
+If the firmware in use doesn't actually expose **Allow IPs (Server)** for editing, the fallback is
+to attach the instances to the router's LAN instead (the existing `lan` macvlan profile) with
+**Access intranet** enabled - VPN clients already reach the router's LAN - trading the dedicated
+subnet and host-to-guest reachability for LAN DHCP addresses.
+
+#### Verification checklist
+
+1. Egress: `incus exec <vpn-instance> -- ping -c1 1.1.1.1` (needs `vpn.uplink` = the real uplink).
+2. Router route: from a VPN client, `ping <vpn-instance-10.43.x.y>` (needs the router peer +
+   client `AllowedIPs` above). When it fails, the Pi's own `10.6.0.3` still pings.
+3. Same-bridge L2: `incus exec <vpn-instance> -- ping -c1 <another-vpn-instance>`.
+4. `incusbr-vpn` reports `DOWN` while it has zero members (a managed bridge with no carrier); it
+   comes up and serves DHCP once an instance attaches - confirm via `incus network list`.
+
+`rpi5-8gb` is the only host wired up so far: tunnel address `10.6.0.3/32`, public key
+`5+zTY39/YS5sstc4dvw1A74eLfv5v+qkdgoMBkqqhDw=` (derive any host's with `wg pubkey`). `rpi5-4gb` and
+cross-host instance routing (static routes between the two incus subnets over the LAN) are
+additive, deferred until that board is in service.
 
 ### Monitoring (Datadog)
 
@@ -273,6 +363,9 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | Client auth | incus client cert trusted via preseed | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires |
 | Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall |
 | Guest memory budget | per-host (6 GiB / 2.5 GiB) | leaves headroom for host + zram on the 8/4 GB boards |
+| VPN topology | router = WireGuard server; Pis = split-tunnel nodes (`10.6.0.0/24` only) | full tunnel (`0.0.0.0/0`) would route the host's and instances' traffic through the router and disturb direct LAN/instance paths; split tunnel keeps management/LAN direct while still reaching every VPN client |
+| VPN-reachable instances | separate `incusbr-vpn` bridge (`10.43.0.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
+| WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
 
@@ -281,6 +374,11 @@ Three upstream rough edges are worked around in the module, each with a comment 
 `root@<pi-ip>` below always refers to the bootstrap installer (which allows root SSH - required by
 `nixos-anywhere` itself). Once a main system (`rpi5-8gb`/`rpi5-4gb`) is actually running, root SSH
 is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollback" below).
+
+These commands are wrapped as `task` targets in `Taskfile.yml` (`task --list` shows them all). Each
+honours `HOST` (default `rpi5-8gb`) and `IP` (default `192.168.50.80`), e.g.
+`task deploy HOST=rpi5-4gb IP=192.168.50.81`; `task install` is the hard reset, `task install:mount`
+the soft reset, `task bootstrap`/`task flash DISK=/dev/rdiskX` handle the SD image.
 
 **Why root SSH can't be disabled on the bootstrap installer too**: tried this (disable root,
 `admin@` + passwordless sudo, same as the main systems) and it fails specifically for
@@ -412,6 +510,8 @@ USB passthrough devices never migrate with an instance; re-attach at the destina
 Confirmed working on real hardware (8 GB board):
 
 - Vendor kernel boots, RP1 (USB + Ethernet) alive, NVMe enumerated on PCIe
+- The Pi 5 vendor kernel/DTB exposes the wired uplink as `end0` (`wld0` is wireless) - there is no
+  `eth0` on this image; `vpn.uplink` and `macvlan.parent` therefore default to `end0`
 - Full impermanence mount tree (`@root`, `@nix`, `@persist` + binds, `@snapshots`)
 - `nixos-rebuild switch` from macOS, including the declarative FAT refresh (stale DTBs pruned)
 - incus: `incusbr0` bridge + NAT, `default` btrfs pool (CoW subvolumes verified via `btrfs
@@ -449,6 +549,9 @@ Not yet verified on hardware:
   `acme.enable = true`
 - the Datadog agent on either host: needs `datadog_api_key` added to `secrets/rpi5.yaml` first (the
   agent unit fails to read a missing `/run/secrets/datadog_api_key`)
+- WireGuard client (`wg0`) on `rpi5-8gb`: handshake with the router, `10.6.0.0/24` route via `wg0`,
+  and `incusbr-vpn` instances reachable from another VPN client with the real instance source IP
+  preserved (also depends on the router-side peer route/forwarding above)
 
 ## Known risks
 
@@ -462,6 +565,13 @@ Not yet verified on hardware:
 - sops: a host whose SSH host key is not a recipient in `.sops.yaml` fails secret decryption at
   boot (so `incus.service` gets no GoDaddy creds and no cert is issued). Adding recipients means
   re-running `sops updatekeys secrets/rpi5.yaml` from a machine that can already decrypt.
+- VPN reachability depends on router-side config that lives outside this repo (each Pi peer's
+  `AllowedIPs` must include the incus subnet, and forwarding between VPN clients and it must be
+  permitted). A missing route or forward rule presents as "the Pi's wg IP pings, an instance
+  doesn't".
+- The WireGuard keys live in the shared `secrets/rpi5.yaml`, which every age recipient can fully
+  decrypt; a future `rpi5-4gb` key must therefore use its own name rather than reuse
+  `wg_private_key`.
 - ACME: DNS-01 depends on GoDaddy API availability and is subject to Let's Encrypt rate limits. The
   client still needs an A record for the name to connect; validation itself does not.
 
@@ -471,4 +581,5 @@ Not yet verified on hardware:
   includes NVMe, retire the SD from daily duty entirely.
 - Re-evaluate mainline kernel once nixos-hardware/nixpkgs settle the Pi 5 DTB story further
   (tracked via nixos-hardware issue #78).
-- WireGuard/tailscale, zigbee passthrough details, secondary hosts at scale - additive.
+- WireGuard on `rpi5-4gb` (same `local.wireguard` options) plus static LAN routes so instances on
+  both hosts reach each other; zigbee passthrough details; secondary hosts at scale - additive.
