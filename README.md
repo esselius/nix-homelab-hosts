@@ -260,7 +260,10 @@ A coredns instance on the VPN bridge (`10.43.0.14`) resolves the internal `int.e
 unreachable when registered on `wg0` (confirmed on hardware - direct queries worked, resolved fell
 back to `1.1.1.1`). The `~` prefix makes it a routing-only domain: only that suffix goes to
 coredns, every other lookup stays direct. This needs `services.resolved`, which the module turns on
-(openresolv/glibc cannot route a domain to a specific server).
+(openresolv/glibc cannot route a domain to a specific server). The same block disables **LLMNR and
+mDNS**: nothing on these subnets answers them, so a reverse (PTR) lookup - which `ping` without `-n`
+and other tools do to print a name - would fall through to LLMNR + mDNS and wait out both timeouts
+(~10s) even though the DNS answer came back instantly (confirmed on hardware).
 
 #### VPN-reachable instances
 
@@ -400,7 +403,7 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | VPN topology | router = WireGuard server; Pis = split-tunnel nodes (`10.6.0.0/24` only) | full tunnel (`0.0.0.0/0`) would route the host's and instances' traffic through the router and disturb direct LAN/instance paths; split tunnel keeps management/LAN direct while still reaching every VPN client |
 | VPN-reachable instances | separate `incusbr-vpn` bridge (`10.43.0.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
 | WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
-| VPN DNS | split DNS: `~int.esselius.dev` to the bridge resolver `10.43.0.14`, registered on `incusbr-vpn` via systemd-resolved | scopes internal lookups without making normal DNS depend on the instance; must be on the bridge, not `wg0` (resolved binds link queries to the link, making an off-link resolver unreachable); openresolv/glibc cannot do per-domain forwarding, so `services.resolved` is required |
+| VPN DNS | split DNS: `~int.esselius.dev` to the bridge resolver `10.43.0.14`, registered on `incusbr-vpn` via systemd-resolved, LLMNR/mDNS off | scopes internal lookups without making normal DNS depend on the instance; must be on the bridge, not `wg0` (resolved binds link queries to the link, making an off-link resolver unreachable); LLMNR/mDNS are disabled because their unanswered reverse-lookup timeouts add ~10s to `ping`/lookups; openresolv/glibc cannot do per-domain forwarding, so `services.resolved` is required |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
 | Incus metrics | OpenMetrics check against a loopback-only, unauthenticated Incus `/1.0/metrics` | no firewall hole, no metrics client cert; runs only where Incus already has local access. These are custom metrics, so they need a paid Datadog plan (Free has no custom-metric allotment) |

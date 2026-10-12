@@ -192,7 +192,18 @@ in
     # / `dnsDomains`). Registered on the bridge, not wg0: systemd-resolved binds a
     # link's queries to that link, and the resolver is on incusbr-vpn. Needs
     # systemd-resolved (openresolv/glibc cannot route a domain to a server).
-    services.resolved.enable = lib.mkIf (cfg.vpn.dns != [ ]) true;
+    #
+    # LLMNR/mDNS are disabled: there are no responders on these subnets, so a
+    # PTR (e.g. ping printing a reply address, or any reverse lookup) falls
+    # through to LLMNR + mDNS on the link and waits out both timeouts (~10s)
+    # after the DNS answer already arrived. Confirmed on hardware.
+    services.resolved = lib.mkIf (cfg.vpn.dns != [ ]) {
+      enable = true;
+      settings.Resolve = {
+        LLMNR = false;
+        MulticastDNS = false;
+      };
+    };
 
     systemd.services.incus-vpn-dns = lib.mkIf (cfg.vpn.dns != [ ]) {
       description = "Register the VPN bridge resolver with systemd-resolved";
