@@ -404,6 +404,20 @@ Three upstream rough edges are worked around in the module, each with a comment 
   NixOS) and binds a dogstatsd unixgram socket under `/var/run/datadog`; the module points
   `run_path` at `/run/datadog-agent` and creates both dirs via `systemd.tmpfiles.rules`.
 
+### Monitoring agent (Grafana Alloy)
+
+`modules/monitoring-agent.nix` (opt-in via `local.monitoringAgent`; enabled on `rpi5-8gb`) runs
+`services.alloy` and ships node metrics and the systemd journal to the monitoring workload on the VPN
+bridge: Prometheus remote-write to `monitoring.int.esselius.dev:8428` (VictoriaMetrics) and Loki push
+to `:3100`. The endpoints resolve through the `int.esselius.dev` split DNS above, so the module is
+outbound-only - no firewall or DNS changes on the host. A `prometheus.relabel` stamps
+`host=<hostname>` on every series, and the journal source labels `host` / `job=systemd-journal`. The
+NixOS `alloy` module runs the service as the `alloy` user in the `systemd-journal` group and reads
+`/etc/alloy/config.alloy`, which this module owns via `environment.etc`.
+
+Requires a `monitoring` record in the coredns zone (the workload repo) pointing at the monitoring
+instance; until then the DNS name will not resolve.
+
 ## Decisions ledger (why each piece)
 
 | Decision | Value | Rationale |
@@ -428,6 +442,7 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
 | Incus metrics | OpenMetrics check against a loopback-only, unauthenticated Incus `/1.0/metrics` | no firewall hole, no metrics client cert; runs only where Incus already has local access. These are custom metrics, so they need a paid Datadog plan (Free has no custom-metric allotment) |
+| Monitoring agent | Grafana Alloy (`local.monitoringAgent`), node metrics + journal to `monitoring.int.esselius.dev` | self-hosted metrics/logs without Datadog's custom-metric cost; reuses the `int.esselius.dev` split DNS so it is outbound-only |
 
 ## Playbooks
 

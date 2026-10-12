@@ -55,4 +55,8 @@
       clientCertificates."incus-ui-localho.st" = ./../certs/incus-ui-localho.st.crt;
     };
   };
+
+  # Ship node metrics + journal to the monitoring workload (VictoriaMetrics/Loki
+  # on the VPN bridge), resolved via the int.esselius.dev split DNS above.
+  local.monitoringAgent.enable = true;
 }
