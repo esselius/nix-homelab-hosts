@@ -1,4 +1,9 @@
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.local.incus.network;
 in
@@ -68,6 +73,29 @@ in
           survive the VPN path. If this does not match the real uplink the
           masquerade rule never matches and VPN-bridge instances lose internet
           egress (they can still reach each other and the host).
+        '';
+      };
+      dns = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "10.43.0.14" ];
+        description = ''
+          Resolvers reachable on the VPN bridge (e.g. a coredns instance). When
+          set, the host resolves `dnsDomains` through them via systemd-resolved,
+          registered on the bridge link. Must be on this bridge: systemd-resolved
+          binds a link's queries to the link, so a resolver on `incusbr-vpn` is
+          unreachable if registered on wg0.
+        '';
+      };
+      dnsDomains = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "~int.esselius.dev" ];
+        description = ''
+          systemd-resolved routing domains for `dns`. A leading `~` makes it a
+          routing-only domain (split DNS): only queries for that suffix go to
+          these resolvers and every other lookup stays direct. Without it the
+          name is also added as a search domain.
         '';
       };
     };
@@ -157,6 +185,44 @@ in
           type nat hook postrouting priority srcnat; policy accept;
           ip saddr ${cfg.vpn.subnet} oifname "${cfg.vpn.uplink}" masquerade
         }
+      '';
+    };
+
+    # Host split DNS for the VPN bridge's resolver (`local.incus.network.vpn.dns`
+    # / `dnsDomains`). Registered on the bridge, not wg0: systemd-resolved binds a
+    # link's queries to that link, and the resolver is on incusbr-vpn. Needs
+    # systemd-resolved (openresolv/glibc cannot route a domain to a server).
+    services.resolved.enable = lib.mkIf (cfg.vpn.dns != [ ]) true;
+
+    systemd.services.incus-vpn-dns = lib.mkIf (cfg.vpn.dns != [ ]) {
+      description = "Register the VPN bridge resolver with systemd-resolved";
+      after = [
+        "incus.service"
+        "systemd-resolved.service"
+      ];
+      wants = [ "systemd-resolved.service" ];
+      partOf = [ "incus.service" ];
+      wantedBy = [ "multi-user.target" ];
+      path = [
+        config.systemd.package
+        pkgs.iproute2
+        pkgs.coreutils
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        # incus.service returns before its networks are created; wait for the
+        # bridge to exist before registering DNS on it.
+        for _ in {1..60}; do
+          ip link show ${lib.escapeShellArg cfg.vpn.bridge} >/dev/null 2>&1 && break
+          sleep 1
+        done
+        resolvectl dns ${lib.escapeShellArg cfg.vpn.bridge} ${lib.escapeShellArgs cfg.vpn.dns}
+      ''
+      + lib.optionalString (cfg.vpn.dnsDomains != [ ]) ''
+        resolvectl domain ${lib.escapeShellArg cfg.vpn.bridge} ${lib.escapeShellArgs cfg.vpn.dnsDomains}
       '';
     };
   };

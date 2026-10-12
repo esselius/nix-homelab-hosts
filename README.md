@@ -250,6 +250,18 @@ instances' traffic through the router, whereas the split tunnel still reaches ev
 lets instance reply traffic return to them. The private key is the sops secret `wg_private_key`;
 `wg0` is a firewall-trusted interface and `net.ipv4.ip_forward` is enabled.
 
+#### Host split DNS for the VPN bridge
+
+A coredns instance on the VPN bridge (`10.43.0.14`) resolves the internal `int.esselius.dev` zone.
+`local.incus.network.vpn.dns` + `dnsDomains = [ "~int.esselius.dev" ]` register it on the
+`incusbr-vpn` link via `systemd-resolved` (a oneshot service waits for the bridge, since
+`incus.service` returns before its networks are created). It is attached to the **bridge, not
+`wg0`**: systemd-resolved binds a link's queries to that link, so a resolver on `incusbr-vpn` is
+unreachable when registered on `wg0` (confirmed on hardware - direct queries worked, resolved fell
+back to `1.1.1.1`). The `~` prefix makes it a routing-only domain: only that suffix goes to
+coredns, every other lookup stays direct. This needs `services.resolved`, which the module turns on
+(openresolv/glibc cannot route a domain to a specific server).
+
 #### VPN-reachable instances
 
 A separate managed bridge `incusbr-vpn` (`10.43.0.1/24`, IPv4-only) carries instances that other VPN
@@ -388,6 +400,7 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | VPN topology | router = WireGuard server; Pis = split-tunnel nodes (`10.6.0.0/24` only) | full tunnel (`0.0.0.0/0`) would route the host's and instances' traffic through the router and disturb direct LAN/instance paths; split tunnel keeps management/LAN direct while still reaching every VPN client |
 | VPN-reachable instances | separate `incusbr-vpn` bridge (`10.43.0.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
 | WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
+| VPN DNS | split DNS: `~int.esselius.dev` to the bridge resolver `10.43.0.14`, registered on `incusbr-vpn` via systemd-resolved | scopes internal lookups without making normal DNS depend on the instance; must be on the bridge, not `wg0` (resolved binds link queries to the link, making an off-link resolver unreachable); openresolv/glibc cannot do per-domain forwarding, so `services.resolved` is required |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
 | Incus metrics | OpenMetrics check against a loopback-only, unauthenticated Incus `/1.0/metrics` | no firewall hole, no metrics client cert; runs only where Incus already has local access. These are custom metrics, so they need a paid Datadog plan (Free has no custom-metric allotment) |

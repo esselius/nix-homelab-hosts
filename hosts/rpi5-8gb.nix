@@ -23,6 +23,11 @@
       # end0 (see `ip -br addr`), so the egress masquerade targets it.
       vpn.enable = true;
       vpn.uplink = "end0";
+      # coredns instance on the VPN bridge. Only the internal int.esselius.dev
+      # zone is resolved through it (split DNS via systemd-resolved); everything
+      # else keeps using the normal resolvers.
+      vpn.dns = [ "10.43.0.14" ];
+      vpn.dnsDomains = [ "~int.esselius.dev" ];
     };
     # 8 GB board: leave ~2 GB for the host + zram.
     guest = {
