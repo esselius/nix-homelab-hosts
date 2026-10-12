@@ -265,6 +265,26 @@ mDNS**: nothing on these subnets answers them, so a reverse (PTR) lookup - which
 and other tools do to print a name - would fall through to LLMNR + mDNS and wait out both timeouts
 (~10s) even though the DNS answer came back instantly (confirmed on hardware).
 
+#### Direct peers (bypass the router)
+
+By default each host's only peer is the router, so VPN traffic between two hosts (and between an
+instance and a client) hairpins through the ASUS WireGuard server: it is decrypted and re-encrypted
+there, and measured ~225 Mbit/s. `local.wireguard.extraPeers` (with a fixed `listenPort`, so the host
+is dialable) adds another host as a directly-dialed peer. The peer's VPN `/32` is more specific than
+the router peer's `vpnSubnet`, so WireGuard's cryptokey routing sends that address directly; the
+router peer stays for the rest of the subnet. `allowedIPsAsRoutes` adds the matching route, and the
+module opens the UDP `listenPort` inbound (a direct peer dials in from outside `wg0`).
+
+Both ends must list each other - it is a plain public-key swap (get a host's with
+`wg show wg0 public-key`; public keys are safe to commit, private keys stay in sops). Giving the
+direct peer the incus subnets (`10.42.0.0/24`, `10.43.0.0/24`) in its AllowedIPs on the client side
+also makes instance -> client traffic take the direct path, since the host forwards for its instances
+and the route already points at the direct peer; instance source IPs still survive (the VPN bridge is
+`nat = false`, see below).
+
+Measured on `rpi5-8gb` <-> adama over the gigabit LAN: ~630 Mbit/s single-stream and ~900 Mbit/s
+aggregate with `iperf3 -P 4` (~line rate), versus ~225 Mbit/s when it hairpinned through the router.
+
 #### VPN-reachable instances
 
 A separate managed bridge `incusbr-vpn` (`10.43.0.1/24`, IPv4-only) carries instances that other VPN
@@ -404,6 +424,7 @@ Three upstream rough edges are worked around in the module, each with a comment 
 | VPN-reachable instances | separate `incusbr-vpn` bridge (`10.43.0.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
 | WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
 | VPN DNS | split DNS: `~int.esselius.dev` to the bridge resolver `10.43.0.14`, registered on `incusbr-vpn` via systemd-resolved, LLMNR/mDNS off | scopes internal lookups without making normal DNS depend on the instance; must be on the bridge, not `wg0` (resolved binds link queries to the link, making an off-link resolver unreachable); LLMNR/mDNS are disabled because their unanswered reverse-lookup timeouts add ~10s to `ping`/lookups; openresolv/glibc cannot do per-domain forwarding, so `services.resolved` is required |
+| Direct WG peers | `local.wireguard.extraPeers` + fixed `listenPort`, key swap both ends | avoids the router hairpin and its double crypto; the peer's `/32` is more specific than the router's `vpnSubnet` so routing stays unambiguous; measured 225 -> ~900 Mbit/s aggregate over gigabit |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring | Datadog agent v7 (US1), API key via sops | agent reads its own `apiKeyFile`; secret chowned to the `datadog` user; config is declarative, host state ephemeral |
 | Incus metrics | OpenMetrics check against a loopback-only, unauthenticated Incus `/1.0/metrics` | no firewall hole, no metrics client cert; runs only where Incus already has local access. These are custom metrics, so they need a paid Datadog plan (Free has no custom-metric allotment) |

@@ -50,6 +50,53 @@ in
         them. Deliberately not 0.0.0.0/0 (split tunnel).
       '';
     };
+
+    listenPort = lib.mkOption {
+      type = lib.types.nullOr lib.types.port;
+      default = null;
+      example = 51820;
+      description = ''
+        Fixed UDP listen port. Unset means the kernel picks one per boot, which
+        makes wg0 unusable as a direct peer's endpoint; set it (and open the
+        port) when adding `extraPeers` that dial this host.
+      '';
+    };
+
+    extraPeers = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            publicKey = lib.mkOption {
+              type = lib.types.str;
+              description = "Peer's WireGuard public key (`wg show wg0 public key`); public, safe to commit.";
+            };
+            endpoint = lib.mkOption {
+              type = lib.types.str;
+              description = "host:port to dial this peer at (its reachable address + its listen port).";
+            };
+            allowedIPs = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                IPs routed to this peer. Use the peer's VPN /32 so it is more
+                specific than the router peer's `vpnSubnet` and wins the route.
+              '';
+            };
+            persistentKeepalive = lib.mkOption {
+              type = lib.types.nullOr lib.types.int;
+              default = null;
+              description = "Keepalive seconds; needed only if the peer is behind NAT.";
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = ''
+        Extra peers to talk to directly instead of hairpinning through the
+        router's WireGuard server. The router peer stays for the rest of
+        `vpnSubnet`. Both ends must list each other (public-key swap).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -60,6 +107,7 @@ in
     networking.wireguard.interfaces.wg0 = {
       ips = [ cfg.address ];
       privateKeyFile = config.sops.secrets.${cfg.privateKeySecret}.path;
+      inherit (cfg) listenPort;
       # Add the peer's AllowedIPs as routes; without this the host can reach the
       # router but not the rest of the VPN subnet, and instance replies would
       # egress the wrong interface.
@@ -73,8 +121,21 @@ in
           # push packets back to this host behind its home NAT.
           persistentKeepalive = 25;
         }
-      ];
+      ]
+      ++ map (
+        p:
+        {
+          inherit (p) publicKey endpoint allowedIPs;
+        }
+        // lib.optionalAttrs (p.persistentKeepalive != null) {
+          inherit (p) persistentKeepalive;
+        }
+      ) cfg.extraPeers;
     };
+
+    # A direct peer dials this host's wg0 port from outside wg0 (e.g. the LAN),
+    # so the base firewall must let that UDP in.
+    networking.firewall.allowedUDPPorts = lib.optional (cfg.listenPort != null) cfg.listenPort;
 
     # wg0 carries traffic for the incus bridge (and the host itself); trusted so
     # the NixOS firewall doesn't drop the forwarded VPN <-> incusbr-vpn flows.

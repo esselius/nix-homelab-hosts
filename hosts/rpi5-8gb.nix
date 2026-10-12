@@ -11,6 +11,19 @@
     serverEndpoint = "195.58.123.102";
     serverPort = 51820;
     vpnSubnet = "10.6.0.0/24";
+    # Fixed port so adama can dial us as a direct peer (192.168.50.80:51820).
+    listenPort = 51820;
+    # Direct peer: adama is on the same gigabit LAN, so route its /32 to it
+    # directly instead of hairpinning through the ASUS WireGuard server. WireGuard
+    # picks the more specific /32 over the router peer's 10.6.0.0/24.
+    extraPeers = [
+      {
+        publicKey = "dWWZ4LE0lK1gRjE5GEGyEkHAbDhXjLsT379K/6Lk7EM=";
+        endpoint = "192.168.50.43:51820";
+        allowedIPs = [ "10.6.0.5/32" ];
+        persistentKeepalive = 25;
+      }
+    ];
   };
 
   local.incus = {

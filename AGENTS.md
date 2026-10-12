@@ -15,5 +15,6 @@ workloads live here - those run as incus instances.
   flake (`formatter`, `checks.eval-all`, `checks.fmt`).
 - Never commit plaintext secrets. `secrets/rpi5.yaml` is sops-encrypted; edit it
   only inside `nix develop` (whose shellHook sets `SOPS_AGE_KEY_CMD`).
-- Deploy with the host as build host (the vendor kernel is uncached):
-  `nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<ip> --build-host admin@<ip> --sudo`
+- Deploy with `--target-host` only; no `--build-host` needed (Nix builds via
+  the configured aarch64-linux builder):
+  `nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<ip> --sudo`
