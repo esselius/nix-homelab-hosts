@@ -366,6 +366,14 @@ outbound-only - no firewall or DNS changes on the host. A `prometheus.relabel` s
 NixOS `alloy` module runs the service as the `alloy` user in the `systemd-journal` group and reads
 `/etc/alloy/config.alloy`, which this module owns via `environment.etc`.
 
+It also scrapes Incus's per-instance metrics (`services.alloy` job `incus`, `local.monitoringAgent.scrapeIncus`).
+`modules/incus/preseed.nix` exposes Incus's `/1.0/metrics` on a loopback-only listener
+(`local.incus.metrics`, enabled on `rpi5-8gb`; `core.metrics_address = 127.0.0.1:9100`,
+`core.metrics_authentication = false`). That endpoint is HTTPS with Incus's own certificate, so the
+scrape skips TLS verification and never leaves the host - no firewall hole and no metrics client cert.
+Note: the listener is set imperatively by preseed, so removing it from config does not unset it on a
+running daemon (`incus config unset core.metrics_address`).
+
 Requires a `monitoring` record in the coredns zone (the workload repo) pointing at the monitoring
 instance; until then the DNS name will not resolve.
 
@@ -392,6 +400,7 @@ instance; until then the DNS name will not resolve.
 | Direct WG peers | `local.wireguard.extraPeers` + fixed `listenPort`, key swap both ends | avoids the router hairpin and its double crypto; the peer's `/32` is more specific than the router's `vpnSubnet` so routing stays unambiguous; measured 225 -> ~900 Mbit/s aggregate over gigabit |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring agent | Grafana Alloy (`local.monitoringAgent`), node metrics + journal to `monitoring.int.esselius.dev` | self-hosted metrics/logs; reuses the `int.esselius.dev` split DNS so it is outbound-only |
+| Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated) | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs |
 
 ## Playbooks
 

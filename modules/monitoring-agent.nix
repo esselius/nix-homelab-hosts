@@ -2,6 +2,21 @@
 let
   cfg = config.local.monitoringAgent;
   hostName = config.networking.hostName;
+
+  # Incus's per-instance metrics, scraped from the loopback listener that
+  # modules/incus/preseed.nix exposes when local.incus.metrics.enable is set.
+  # The endpoint is HTTPS with Incus's own certificate, hence skip-verify.
+  incusScrape = lib.optionalString (cfg.scrapeIncus && config.local.incus.metrics.enable) ''
+    prometheus.scrape "incus" {
+      targets      = [{ __address__ = "${config.local.incus.metrics.address}" }]
+      scheme       = "https"
+      metrics_path = "/1.0/metrics"
+      tls_config {
+        insecure_skip_verify = true
+      }
+      forward_to   = [prometheus.relabel.host.receiver]
+    }
+  '';
 in
 {
   options.local.monitoringAgent = {
@@ -21,6 +36,15 @@ in
       default = "http://monitoring.int.esselius.dev:3100/loki/api/v1/push";
       description = "Loki push endpoint.";
     };
+
+    scrapeIncus = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Also scrape Incus's `/1.0/metrics` (per-instance CPU/memory/disk/network),
+        requires `local.incus.metrics.enable`.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -38,6 +62,8 @@ in
         targets    = prometheus.exporter.unix.node.targets
         forward_to = [prometheus.relabel.host.receiver]
       }
+
+      ${incusScrape}
 
       prometheus.relabel "host" {
         forward_to = [prometheus.remote_write.default.receiver]

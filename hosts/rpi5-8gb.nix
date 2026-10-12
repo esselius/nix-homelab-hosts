@@ -42,6 +42,8 @@
       vpn.dns = [ "10.43.0.14" ];
       vpn.dnsDomains = [ "~int.esselius.dev" ];
     };
+    # Expose Incus's /1.0/metrics on loopback for the Alloy agent to scrape.
+    metrics.enable = true;
     # 8 GB board: leave ~2 GB for the host + zram.
     guest = {
       memoryMiB = 6144;
