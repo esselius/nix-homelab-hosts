@@ -50,7 +50,6 @@
         ./modules/wireguard.nix
         ./modules/incus
         ./modules/sops.nix
-        ./modules/datadog.nix
         ./modules/monitoring-agent.nix
         ./modules/storage.nix
         ./disko-nvme.nix
