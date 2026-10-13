@@ -509,12 +509,19 @@ Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `modul
 
 ```bash
 nix flake update          # deliberate bumps only
-nixos-rebuild switch --flake .#rpi5-8gb \
-  --target-host admin@<pi-ip> --build-host admin@<pi-ip> --sudo
+task cache-push           # push the host closure to Cachix (and Attic if up)
+task deploy               # Mac builds; the Pi pulls, else builds on-target
 ```
 
-`--build-host` (the Pi building its own closure) matters here: the vendor kernel is uncached, and the
-Pi already has it in its store, so building on the Mac would rebuild it via the `linux-builder`.
+Substituters are layered so a host deploy never depends on the cluster
+(`modules/nix-cache.nix`): **Cachix** (external, always up - holds the vendor
+kernel), then the local **Attic** workload (best-effort), then an **on-target
+build** as the last resort. `task deploy` probes Cachix: if it answers, the Mac
+(via `linux-builder`) builds and the Pi pulls the closure (`--use-substitutes`);
+otherwise it builds the closure on the Pi itself, which already has the vendor
+kernel in its store. Warm the external cache with `task cache-push` first
+(`cachix authtoken` once). See the nix-workloads README ("Build cache (Attic)")
+for the local cache's one-time bootstrap.
 
 Rollback after a bad update: choose the previous generation at the U-Boot prompt (extlinux menu, SD
 p2). Root state is irrelevant (impermanence), so rollback is purely about kernel/generation

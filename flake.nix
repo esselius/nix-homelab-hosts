@@ -51,6 +51,7 @@
         ./modules/incus
         ./modules/sops.nix
         ./modules/monitoring-agent.nix
+        ./modules/nix-cache.nix
         ./modules/storage.nix
         ./disko-nvme.nix
         ./disko-sd.nix
@@ -83,6 +84,10 @@
             pkgs.ssh-to-age
             # Derive/verify WireGuard public keys (`wg pubkey`) and inspect peers.
             pkgs.wireguard-tools
+            # Push host closures to the caches (`task cache-push`): the external
+            # Cachix fallback and the local Attic workload.
+            pkgs.cachix
+            pkgs.attic-client
             pkgs.opencode
           ];
 

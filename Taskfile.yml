@@ -17,11 +17,46 @@ tasks:
       - task --list
 
   deploy:
-    desc: 'Update the running host (builds on-target, then switches)'
+    desc: 'Update the running host (pulls from the cache when reachable, else builds on-target)'
     cmds:
-      - >-
-        nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}}
-        --target-host {{.ADMIN}}@{{.IP}} --build-host {{.ADMIN}}@{{.IP}} --sudo
+      - |
+        set -e
+        # The host is bootstrap-critical: its deploy must never depend on the
+        # Attic cache, which runs as a guest *on* this cluster. The substituters
+        # are layered (see modules/nix-cache.nix):
+        #   Cachix (external, always up) -> Attic (local, best-effort) ->
+        #   on-target build (last resort).
+        # If the external cache answers, the Mac (via linux-builder) builds and
+        # the host substitutes the closure (--use-substitutes); warm it with
+        # `task cache-push` first. If not, build the closure on the host itself -
+        # it already has the vendor kernel in its store.
+        if curl -fsS --max-time 5 https://esselius.cachix.org/nix-cache-info >/dev/null 2>&1; then
+          echo "cache reachable - building on the Mac; the host substitutes"
+          nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
+            --target-host {{.ADMIN}}@{{.IP}} --use-substitutes --sudo
+        else
+          echo "cache unreachable - falling back to an on-target build"
+          nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
+            --target-host {{.ADMIN}}@{{.IP}} --build-host {{.ADMIN}}@{{.IP}} --sudo
+        fi
+
+  cache-push:
+    desc: 'Push the host system closure to the caches (Cachix, then Attic if reachable)'
+    cmds:
+      - |
+        set -e
+        # Only the deployable closure is pushed (not every intermediate the
+        # builder produced); both caches skip paths already on cache.nixos.org.
+        # Cachix is the host's external fallback - requires a token once:
+        #   cachix authtoken <token>
+        system="$(nix build {{.FLAKE}}#nixosConfigurations.{{.HOST}}.config.system.build.toplevel --no-link --print-out-paths)"
+        echo "pushing {{.HOST}} ($system)"
+        cachix push "${CACHIX_CACHE:-esselius}" "$system"
+        if curl -fsS --max-time 5 https://cache.int.esselius.dev/homelab/nix-cache-info >/dev/null 2>&1; then
+          attic push "${ATTIC_CACHE:-homelab}" "$system"
+        else
+          echo "attic cache unreachable - skipped"
+        fi
 
   install:
     desc: 'HARD reset: nixos-anywhere full install (WIPES the NVMe)'
