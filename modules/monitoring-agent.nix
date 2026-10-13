@@ -60,7 +60,19 @@ in
 
       prometheus.scrape "node" {
         targets    = prometheus.exporter.unix.node.targets
+        forward_to = [prometheus.relabel.node.receiver]
+      }
+
+      // The incus guests run this same node exporter, so both they and the
+      // hosts emit node_* series with job="integrations/unix". Mark the host's
+      // own series (the node scrape only - not the incus scrape below) so the
+      // physical-node dashboards can tell them apart.
+      prometheus.relabel "node" {
         forward_to = [prometheus.relabel.host.receiver]
+        rule {
+          target_label = "node_type"
+          replacement  = "host"
+        }
       }
 
       ${incusScrape}
