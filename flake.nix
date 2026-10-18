@@ -60,7 +60,6 @@
         ./modules/monitoring-agent.nix
         ./modules/cgroup-metrics.nix
         ./modules/nvme-wear.nix
-        ./modules/ksm.nix
         ./modules/nix-cache.nix
         ./modules/pki.nix
         ./modules/storage.nix
