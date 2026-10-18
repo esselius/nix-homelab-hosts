@@ -53,9 +53,17 @@ in
     # /etc/alloy/config.alloy (its configPath default), which we own here.
     services.alloy.enable = true;
 
+    boot.kernelParams = [ "psi=1" ];
+
     environment.etc."alloy/config.alloy".text = ''
       prometheus.exporter.unix "node" {
-        enable_collectors = ["systemd"]
+        enable_collectors = ["systemd", "ksmd"]
+        vmstat {
+          fields = "^(oom_kill|pgpg|pswp|pg.*fault|cow_ksm|ksm).*"
+        }
+        textfile {
+          directory = "/run/node_exporter/textfile"
+        }
       }
 
       prometheus.scrape "node" {

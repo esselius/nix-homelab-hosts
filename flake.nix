@@ -1,6 +1,13 @@
 {
   description = "NixOS Raspberry Pi 5 incus VM hosts, impermanence on NVMe, SD boot for bootloader";
 
+  nixConfig = {
+    extra-substituters = [ "https://esselius.cachix.org" ];
+    extra-trusted-public-keys = [
+      "esselius.cachix.org-1:h6FQzpdflxdZfnnL0caV88xt5K5sNzgO0VIHQthTymA="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -51,6 +58,8 @@
         ./modules/incus
         ./modules/sops.nix
         ./modules/monitoring-agent.nix
+        ./modules/cgroup-metrics.nix
+        ./modules/nvme-wear.nix
         ./modules/nix-cache.nix
         ./modules/storage.nix
         ./disko-nvme.nix
