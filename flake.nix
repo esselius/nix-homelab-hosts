@@ -61,6 +61,7 @@
         ./modules/cgroup-metrics.nix
         ./modules/nvme-wear.nix
         ./modules/nix-cache.nix
+        ./modules/pki.nix
         ./modules/storage.nix
         ./disko-nvme.nix
         ./disko-sd.nix

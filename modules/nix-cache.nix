@@ -16,10 +16,10 @@ let
   # unreachable substituter, and a host deploy never depends on it.
   atticUrl = "https://cache.int.esselius.dev/homelab";
 
-  # The Attic narinfo key is generated when the cache is *created*, so it can
-  # only be filled in after the one-time bootstrap:
-  #   attic cache info homelab   ->   Public Key: homelab:<base64>
-  atticPublicKey = null;
+  # The Attic narinfo key is generated when the cache is *created*. Fetched
+  # once after the bootstrap with `attic cache info homelab`, which prints
+  # `Public Key: homelab:<base64>`.
+  atticPublicKey = "homelab:pFO/rlooR8VpYf/qzCPDwxIxynbX5lwtSP0CmBZbAdw=";
 in
 {
   nix.settings = {

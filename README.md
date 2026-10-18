@@ -390,6 +390,7 @@ instance; until then the DNS name will not resolve.
 | Install | `nixos-anywhere`, kexec skipped | `VARIANT_ID=installer` on the bootstrap image makes nixos-anywhere's `runKexec()` early-return; kexec on Pi 5 is flaky |
 | Topology | standalone pair, no cluster | 2-member Cowsql/Raft clusters lose quorum on a single node update; container live migration is stop-and-move anyway for real workloads; offline `incus move` covers the need |
 | TLS server cert | Let's Encrypt, DNS-01 via GoDaddy | publicly trusted (no browser warning, no keychain import), no inbound `:80`, no CA to run or rotate; GoDaddy creds held in sops |
+| Internal TLS trust | vendored Esselius root CA (`modules/pki.nix`) | Attic serves a step-ca certificate, so the hosts need the root in their bundle; this is the same public certificate `konfig` trusts, and a root rotation replaces one file |
 | Client auth | incus client cert trusted via preseed | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires |
 | Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall |
 | Guest memory budget | per-host (6 GiB / 2.5 GiB) | leaves headroom for host + zram on the 8/4 GB boards |
@@ -523,6 +524,12 @@ kernel in its store. Warm the external cache with `task cache-push` first
 (`cachix authtoken` once). See the nix-workloads README ("Build cache (Attic)")
 for the local cache's one-time bootstrap.
 
+The Pi must verify Attic's certificate: `modules/pki.nix` adds the vendored
+Esselius root CA (`certs/esselius-root-ca.crt`, a copy of `konfig/root_ca.crt`)
+to `security.pki.certificateFiles`, and `modules/nix-cache.nix` pins the cache's
+narinfo key. Both are public material. Without the root, every Nix invocation on
+the host logs `unable to get local issuer certificate` and silently skips Attic.
+
 Rollback after a bad update: choose the previous generation at the U-Boot prompt (extlinux menu, SD
 p2). Root state is irrelevant (impermanence), so rollback is purely about kernel/generation
 correctness.
@@ -574,6 +581,10 @@ Confirmed working on real hardware (8 GB board):
   automatically, bootloader install succeeds with zero manual steps, verified end-to-end on real
   hardware including a full reboot into the working system afterward - the old manual chroot +
   `nixos-enter` dance is no longer required for either install path
+- Internal TLS trust (`modules/pki.nix`, deployed to `rpi5-8gb`): `curl` against
+  `https://cache.int.esselius.dev/homelab/nix-cache-info` returns 200,
+  `nix store ping --store https://cache.int.esselius.dev/homelab` succeeds, and Nix no longer logs
+  `unable to get local issuer certificate` or retries the Attic substituter
 
 Pre-flight tested from macOS (not on the Pi):
 
@@ -616,6 +627,9 @@ Not yet verified on hardware:
   `wg_private_key`.
 - ACME: DNS-01 depends on GoDaddy API availability and is subject to Let's Encrypt rate limits. The
   client still needs an A record for the name to connect; validation itself does not.
+- Internal TLS trust is pinned to the Esselius root CA (`certs/esselius-root-ca.crt`). Rotating the
+  step-ca root without updating that file breaks Attic substitution - deploys still work via Cachix
+  or an on-target build, but every Nix invocation on the host logs TLS warnings.
 
 ## Future paths (documented, not built)
 
