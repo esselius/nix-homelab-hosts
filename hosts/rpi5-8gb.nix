@@ -11,22 +11,51 @@
     serverEndpoint = "195.58.123.102";
     serverPort = 51820;
     vpnSubnet = "10.6.0.0/24";
-    # Fixed port so adama can dial us as a direct peer (192.168.50.80:51820).
+    # Fixed port so rpi5-4gb can dial us as a direct peer (192.168.50.80:51820).
     listenPort = 51820;
-    # Direct peer: adama is on the same gigabit LAN, so route its /32 to it
+    # Direct peer: rpi5-4gb is on the same gigabit LAN, so route its /32 to it
     # directly instead of hairpinning through the ASUS WireGuard server. WireGuard
     # picks the more specific /32 over the router peer's 10.6.0.0/24.
     extraPeers = [
       {
-        publicKey = "dWWZ4LE0lK1gRjE5GEGyEkHAbDhXjLsT379K/6Lk7EM=";
-        endpoint = "192.168.50.43:51820";
-        allowedIPs = [ "10.6.0.5/32" ];
+        # rpi5-4gb (formerly the "adama" profile); it dials us back on 51821,
+        # so DNS forwarding, monitoring, and cross-host instance traffic stay
+        # on the LAN instead of hairpinning through the router.
+        publicKey = "9MuNcL6y5nT0F2EQSI42mJ01BTEnhSRpc5sPZyKBEFU=";
+        endpoint = "192.168.50.33:51821";
+        allowedIPs = [
+          "10.6.0.5/32"
+          "10.42.1.0/24"
+          "10.43.1.0/24"
+        ];
         persistentKeepalive = 25;
       }
     ];
   };
 
+  # Host-level resolver for VPN clients. It lives on wg0, not on the Incus
+  # bridge, so DNS keeps working when Incus or incusbr-vpn is down. The host
+  # itself only routes int.esselius.dev through it (see modules/dns.nix).
+  local.dns = {
+    enable = true;
+    listenAddresses = [
+      "127.0.0.1"
+      "10.6.0.3"
+    ];
+    incusPrimary = "127.0.0.1@1053";
+    bootstrap = {
+      cache = "10.43.0.20";
+      monitoring = "10.43.0.12";
+    };
+    srv = {
+      "_mqtt._tcp" = "0 0 1883 mosquitto.int.esselius.dev.";
+    };
+  };
+
   local.incus = {
+    # Incus's built-in DNS serves the network zone over AXFR only; Unbound
+    # consumes it on loopback. No dependency on the bridge's :53 listener.
+    dnsAddress = "127.0.0.1:1053";
     network = {
       ipv4 = "10.42.0.1/24";
       ipv6 = "fd42:0::1/64";
@@ -36,11 +65,7 @@
       # end0 (see `ip -br addr`), so the egress masquerade targets it.
       vpn.enable = true;
       vpn.uplink = "end0";
-      # coredns instance on the VPN bridge. Only the internal int.esselius.dev
-      # zone is resolved through it (split DNS via systemd-resolved); everything
-      # else keeps using the normal resolvers.
-      vpn.dns = [ "10.43.0.14" ];
-      vpn.dnsDomains = [ "~int.esselius.dev" ];
+      vpn.dnsZone = "int.esselius.dev";
     };
     # Expose Incus's /1.0/metrics on loopback for the Alloy agent to scrape.
     metrics.enable = true;

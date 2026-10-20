@@ -80,7 +80,7 @@ in
         default = [ ];
         example = [ "10.43.0.14" ];
         description = ''
-          Resolvers reachable on the VPN bridge (e.g. a coredns instance). When
+          Resolvers reachable on the VPN bridge (for example a host resolver reachable there). When
           set, the host resolves `dnsDomains` through them via systemd-resolved,
           registered on the bridge link. Must be on this bridge: systemd-resolved
           binds a link's queries to the link, so a resolver on `incusbr-vpn` is
@@ -96,6 +96,15 @@ in
           routing-only domain (split DNS): only queries for that suffix go to
           these resolvers and every other lookup stays direct. Without it the
           name is also added as a search domain.
+        '';
+      };
+      dnsZone = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "int.esselius.dev";
+        description = ''
+          Forward network zone served by Incus's built-in DNS. The zone itself
+          and its records are owned by the workload repo's Terranix config.
         '';
       };
     };

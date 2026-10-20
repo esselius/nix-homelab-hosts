@@ -7,8 +7,9 @@ workloads live here - those run as incus instances.
 - Prefer small, explicit modules over framework abstractions. `modules/incus/`
   is split by concern; each file contributes to the internal `local.incus.spec`
   and `preseed.nix` is the only place that assembles the preseed value.
-- Hosts (`hosts/*.nix`) tune only `local.incus.{network,guest,tls}` plus
-  `networking.hostName` / `stateVersion`; everything else belongs in `modules/`.
+- Hosts (`hosts/*.nix`) tune only `local.incus.{network,guest,tls}`,
+  `local.wireguard`, `local.dns`, plus `networking.hostName` / `stateVersion`;
+  everything else belongs in `modules/`.
 - This repo documents *why*, not just what: keep the README's decisions ledger,
   "Known risks", and verification status in sync with config changes.
 - Run `nix fmt` and `nix flake check` before committing. Both are wired into the

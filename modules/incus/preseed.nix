@@ -4,6 +4,16 @@ let
   metrics = config.local.incus.metrics;
 in
 {
+  options.local.incus.dnsAddress = lib.mkOption {
+    type = lib.types.nullOr lib.types.str;
+    default = null;
+    example = "127.0.0.1:1053";
+    description = ''
+      Enable Incus's built-in DNS server at this address. It serves network
+      zones over AXFR only; a local secondary (Unbound) consumes the zone.
+    '';
+  };
+
   options.local.incus.metrics = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -38,6 +48,12 @@ in
       "core.metrics_address" = metrics.address;
       "core.metrics_authentication" = "false";
     };
+
+    # The preseed service is PartOf incus.service, so it re-applies on every
+    # incus restart/reboot - not just at install. Don't also restart it merely
+    # because its unit file changed; the create-only bits (`certificates`) are
+    # deliberately kept out, and DNS is applied idempotently by incus-dns.
+    systemd.services.incus-preseed.restartIfChanged = false;
 
     # Single assembly point for the freeform preseed value (see default.nix).
     # Client certificates are NOT part of the preseed: its `certificates` list is

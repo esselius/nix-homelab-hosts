@@ -55,6 +55,7 @@
         ./modules/ssh-access.nix
         ./modules/zram.nix
         ./modules/wireguard.nix
+        ./modules/dns.nix
         ./modules/incus
         ./modules/sops.nix
         ./modules/monitoring-agent.nix

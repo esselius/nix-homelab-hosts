@@ -1,7 +1,7 @@
 version: '3'
 
 # Deploy/ops entry points, mirroring the README "Playbooks". Override the vars
-# per invocation, e.g. `task deploy HOST=rpi5-4gb IP=192.168.50.81`.
+# per invocation, e.g. `task deploy HOST=rpi5-4gb IP=192.168.50.33`.
 vars:
   FLAKE: '.'
   HOST: 'rpi5-8gb'

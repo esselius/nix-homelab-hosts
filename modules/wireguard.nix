@@ -133,6 +133,15 @@ in
       ) cfg.extraPeers;
     };
 
+    # Peer handshake age and per-peer transferred bytes for the WireGuard
+    # dashboard. The exporter needs CAP_NET_ADMIN to read the interface.
+    services.prometheus.exporters.wireguard = {
+      enable = true;
+      listenAddress = "127.0.0.1";
+      interfaces = [ "wg0" ];
+      latestHandshakeDelay = true;
+    };
+
     # A direct peer dials this host's wg0 port from outside wg0 (e.g. the LAN),
     # so the base firewall must let that UDP in.
     networking.firewall.allowedUDPPorts = lib.optional (cfg.listenPort != null) cfg.listenPort;

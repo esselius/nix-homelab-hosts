@@ -162,9 +162,11 @@ tuned via `local.wireguard` - see "WireGuard VPN" below.
   (used to, when the pool was `dir`-backed) - the `btrfs` driver creates its own subvolume there on
   first preseed run, and a pre-existing plain directory at that exact path makes `btrfs subvolume
   create` fail with "File exists".
-- The preseed unit is a one-shot that does **not** re-run automatically if its script changes under
-  a `nixos-rebuild switch` (observed directly); if a preseed edit doesn't appear to take effect,
-  `systemctl start incus-preseed` manually once. Also does not change an **existing** pool's driver
+- The preseed unit is a one-shot that does **not** re-run automatically if only its script changes
+  under a `nixos-rebuild switch` (observed directly; `RestartIfChanged=false`). It *does* re-run on
+  every `incus.service` restart/reboot (`PartOf=incus.service`); if a preseed edit doesn't appear to
+  take effect, `systemctl restart incus-preseed` once (plain `start` is a no-op while it is already
+  active). Also does not change an **existing** pool's driver
   in place (`Error: Storage pool "default" is of type "dir" instead of "btrfs"`) - migrating a live
   pool between drivers means deleting the old one first (`incus storage delete default`, after
   removing whatever profile device references it), then letting preseed recreate it fresh.
@@ -233,35 +235,45 @@ so a browser warns and connecting via LAN IP is a name mismatch regardless of tr
   `/run/secrets/godaddy_acme` always exists before `incus.service` starts.
 - The `godaddy_acme` value is the lego environment file contents: `GODADDY_API_KEY=...` /
   `GODADDY_API_SECRET=...`.
-- `wg_private_key` is `rpi5-8gb`'s base64 WireGuard private key (read by `modules/wireguard.nix`).
-  Its public key (`wg pubkey`) must be configured on the router - see "WireGuard VPN".
+- `wg_private_key` is `rpi5-8gb`'s base64 WireGuard private key and `wg_private_key_4gb` is
+  `rpi5-4gb`'s (selected per host with `local.wireguard.privateKeySecret`). Their public keys
+  (`wg pubkey`) must be configured on the router - see "WireGuard VPN".
 
 ### WireGuard VPN (ASUS router server, Pis as split-tunnel nodes)
 
 The router is an ASUS running its own WireGuard VPN server (VPN Fusion); each Pi joins as a
 **split-tunnel node**, not a road-warrior client. `modules/wireguard.nix` (host-tuned via
 `local.wireguard`) brings up `wg0` with the Pi's
-tunnel address, a single peer (the router), `persistentKeepalive = 25` (so the server can always
-push packets back through the Pi's home NAT), and `allowedIPs = 10.6.0.0/24` - the VPN subnet only.
+tunnel address, the router as a peer, `persistentKeepalive = 25` (so the server can always push
+packets back through the Pi's home NAT), and `allowedIPs = 10.6.0.0/24` - the VPN subnet only.
 Deliberately *not* `0.0.0.0/0`: a default route via `wg0` would drag all of the host's and its
 instances' traffic through the router, whereas the split tunnel still reaches every VPN client and
-lets instance reply traffic return to them. The private key is the sops secret `wg_private_key`;
-`wg0` is a firewall-trusted interface and `net.ipv4.ip_forward` is enabled.
+lets instance reply traffic return to them. Each Pi also lists the other as a direct peer (see
+below). The private keys are the sops secrets `wg_private_key` (`rpi5-8gb`) and
+`wg_private_key_4gb` (`rpi5-4gb`); `wg0` is a firewall-trusted interface and
+`net.ipv4.ip_forward` is enabled.
 
-#### Host split DNS for the VPN bridge
+#### Host resolver for VPN clients
 
-A coredns instance on the VPN bridge (`10.43.0.14`) resolves the internal `int.esselius.dev` zone.
-`local.incus.network.vpn.dns` + `dnsDomains = [ "~int.esselius.dev" ]` register it on the
-`incusbr-vpn` link via `systemd-resolved` (a oneshot service waits for the bridge, since
-`incus.service` returns before its networks are created). It is attached to the **bridge, not
-`wg0`**: systemd-resolved binds a link's queries to that link, so a resolver on `incusbr-vpn` is
-unreachable when registered on `wg0` (confirmed on hardware - direct queries worked, resolved fell
-back to `1.1.1.1`). The `~` prefix makes it a routing-only domain: only that suffix goes to
-coredns, every other lookup stays direct. This needs `services.resolved`, which the module turns on
-(openresolv/glibc cannot route a domain to a specific server). The same block disables **LLMNR and
-mDNS**: nothing on these subnets answers them, so a reverse (PTR) lookup - which `ping` without `-n`
-and other tools do to print a name - would fall through to LLMNR + mDNS and wait out both timeouts
-(~10s) even though the DNS answer came back instantly (confirmed on hardware).
+`modules/dns.nix` runs Unbound on the host and listens on the host's **WireGuard** address
+(`10.6.0.3` on `rpi5-8gb`, `10.6.0.5` on `rpi5-4gb`, plus loopback), not on `incusbr-vpn`. VPN
+clients use that stable address as their resolver. This deliberately removes Incus from the DNS
+data path: if Incus or `incusbr-vpn` does not start, the host resolver still serves the internet and
+cached internal records.
+
+On `rpi5-8gb`, Unbound is the authoritative secondary for `int.esselius.dev`, transferring the zone
+from the local Incus built-in DNS (`127.0.0.1:1053`) and persisting it in a zonefile. Incus serves
+only AXFR; Unbound is the queryable resolver. On `rpi5-4gb` the zone records live on `rpi5-8gb`, so
+its Unbound forwards `int.esselius.dev` to `10.6.0.3` over the direct peer instead of transferring a
+copy. Everything outside the zone is recursively resolved. Static `local-data` keeps `cache.int`,
+`monitoring.int`, and the `_mqtt._tcp` SRV record available even when Incus or the zone transfer is
+unavailable. The host's own `systemd-resolved` routes only `~int.esselius.dev` to `127.0.0.1`; all
+other lookups keep using the normal per-link resolvers. LLMNR and mDNS are disabled for the same
+reason as before: unanswered reverse lookups add ~10 seconds.
+
+`local.dns.listenAddresses` must include the host's `local.wireguard.address`; Unbound is ordered
+after `wireguard-wg0.service` but has no dependency on `incus.service`. WireGuard client configs
+must use that address as their DNS (`rpi5-8gb`: `DNS = 10.6.0.3`; `rpi5-4gb`: `DNS = 10.6.0.5`).
 
 #### Direct peers (bypass the router)
 
@@ -280,13 +292,25 @@ also makes instance -> client traffic take the direct path, since the host forwa
 and the route already points at the direct peer; instance source IPs still survive (the VPN bridge is
 `nat = false`, see below).
 
-Measured on `rpi5-8gb` <-> adama over the gigabit LAN: ~630 Mbit/s single-stream and ~900 Mbit/s
+Measured on `rpi5-8gb` <-> the 4 GB board (then named adama) over the gigabit LAN: ~630 Mbit/s
+single-stream and ~900 Mbit/s
 aggregate with `iperf3 -P 4` (~line rate), versus ~225 Mbit/s when it hairpinned through the router.
+
+The two Pis are direct peers too: `rpi5-8gb` listens on `51820`, `rpi5-4gb` on `51821`, and each
+lists the other's `/32`. The peer also carries the cross-host instance subnets: `rpi5-4gb` routes
+`10.42.0.0/24` (8gb's default bridge) and `10.43.0.0/24` (8gb's VPN bridge) to `rpi5-8gb`, and
+`rpi5-8gb` routes `10.42.1.0/24` (4gb's default bridge) and `10.43.1.0/24` (4gb's VPN bridge)
+back. DNS forwarding, monitoring, and
+cross-host instance traffic therefore take the LAN path and keep working when the router peer is
+absent. The default bridges keep Incus's NAT, so traffic between `incusbr0` instances on different
+hosts is masqueraded to the source host's WireGuard address (`10.6.0.3`/`10.6.0.5`); instances that
+need their real source IP across hosts belong on a VPN bridge.
 
 #### VPN-reachable instances
 
-A separate managed bridge `incusbr-vpn` (`10.43.0.1/24`, IPv4-only) carries instances that other VPN
-clients must reach. It is applied with the `vpn` profile, stacking on `default` exactly like `lan`
+A separate managed bridge `incusbr-vpn` (IPv4-only) carries instances that other VPN clients must
+reach. Each host has its own: `10.43.0.1/24` on `rpi5-8gb`, `10.43.1.1/24` on `rpi5-4gb`. It is
+applied with the `vpn` profile, stacking on `default` exactly like `lan`
 (`incus launch ... -p default -p vpn`), which overrides `default`'s bridged `eth0` onto the VPN
 bridge; `incusbr0`/`default` are unchanged for non-exposed workloads. The VPN bridge is IPv4-only
 (`ipv6.address = "none"` and the masquerade table is family `ip`), so IPv6 is out of scope until
@@ -300,7 +324,7 @@ managed bridges*). With NAT off, a host nftables rule supplies internet egress s
 only:
 
 ```
-ip saddr 10.43.0.0/24 oifname "end0" masquerade
+ip saddr <host-vpn-subnet> oifname "end0" masquerade   # 10.43.0.0/24 or 10.43.1.0/24
 ```
 
 so the VPN path keeps real instance source IPs while instances still reach the internet. The uplink
@@ -314,11 +338,14 @@ what the ASUS WebUI actually exposes. The Pi's profile is set up as ASUS's site-
 profile created for this host and set:
 
 - **Access intranet**: Enable.
-- **Allow IPs (Server)**: `<pi-wg-address>/32, 10.43.0.0/24` - for `rpi5-8gb`,
-  `10.6.0.3/32, 10.43.0.0/24`. The ASUS default is just the peer `/32`; adding the incus subnet is
-  the same edit the ASUS guide makes when it appends the client LAN
-  (`10.6.0.2/32,192.168.100.0/24`). The server needs it to reach instances *and* to accept their
-  return packets. **This is the one edit that matters.**
+- **Allow IPs (Server)**: `<pi-wg-address>/32, <pi-default-subnet>, <pi-vpn-subnet>` - for
+  `rpi5-8gb`, `10.6.0.3/32, 10.42.0.0/24, 10.43.0.0/24`; for `rpi5-4gb`,
+  `10.6.0.5/32, 10.42.1.0/24, 10.43.1.0/24`. The ASUS default is just the peer `/32`; adding the
+  incus subnets is the same edit the ASUS guide makes when it appends the client LAN
+  (`10.6.0.2/32,192.168.100.0/24`). The server needs them to reach instances *and* to accept their
+  return packets. Keep these **per peer and specific**: a client can use the aggregate
+  `AllowedIPs = 10.6.0.0/24, 10.42.0.0/15`, but a `/15` on a router peer swallows the other host's
+  `10.43.0.0/24` and breaks VPN access to it. **This is the edit that matters.**
 - **Allow IPs (Client)**: keep the default `0.0.0.0/0`, which already routes `10.43.0.0/24` into the
   tunnel for every exported client profile. The ASUS UI exposes only this **one global**
   client-AllowedIPs field (no per-client split tunnel), so don't narrow it.
@@ -350,14 +377,23 @@ subnet and host-to-guest reachability for LAN DHCP addresses.
 4. `incusbr-vpn` reports `DOWN` while it has zero members (a managed bridge with no carrier); it
    comes up and serves DHCP once an instance attaches - confirm via `incus network list`.
 
-`rpi5-8gb` is the only host wired up so far: tunnel address `10.6.0.3/32`, public key
-`5+zTY39/YS5sstc4dvw1A74eLfv5v+qkdgoMBkqqhDw=` (derive any host's with `wg pubkey`). `rpi5-4gb` and
-cross-host instance routing (static routes between the two incus subnets over the LAN) are
-additive, deferred until that board is in service.
+Both Pis are wired up:
+
+| Host | Tunnel address | Public key (`wg pubkey`) | Direct listen |
+|------|----------------|--------------------------|---------------|
+| `rpi5-8gb` | `10.6.0.3/32` | `NmlbH35CycjE1thGKwfU4pbYDCevMg+ui+jr9PiK9UM=` | `51820` |
+| `rpi5-4gb` | `10.6.0.5/32` | `9MuNcL6y5nT0F2EQSI42mJ01BTEnhSRpc5sPZyKBEFU=` | `51821` |
+
+Both router peers are configured with their host's subnets (addresses pinned by router DHCP
+reservations). A VPN client with `AllowedIPs = 10.6.0.0/24, 10.42.0.0/15` reaches both WG
+addresses, both resolvers, both default bridges, and both VPN bridges. Cross-host instance routing
+is wired over the direct peer (`10.42.0.0/24` <-> `10.42.1.0/24` and `10.43.0.0/24` <->
+`10.43.1.0/24`); the default `incusbr0` bridges NAT cross-host traffic to the source host's WG
+address, while VPN bridges preserve it.
 
 ### Monitoring (Grafana Alloy)
 
-`modules/monitoring-agent.nix` (opt-in via `local.monitoringAgent`; enabled on `rpi5-8gb`) runs
+`modules/monitoring-agent.nix` (opt-in via `local.monitoringAgent`; enabled on both Pis) runs
 `services.alloy` and ships node metrics and the systemd journal to the monitoring workload on the VPN
 bridge: Prometheus remote-write to `monitoring.int.esselius.dev:8428` (VictoriaMetrics) and Loki push
 to `:3100`. The endpoints resolve through the `int.esselius.dev` split DNS above, so the module is
@@ -368,13 +404,21 @@ NixOS `alloy` module runs the service as the `alloy` user in the `systemd-journa
 
 It also scrapes Incus's per-instance metrics (`services.alloy` job `incus`, `local.monitoringAgent.scrapeIncus`).
 `modules/incus/preseed.nix` exposes Incus's `/1.0/metrics` on a loopback-only listener
-(`local.incus.metrics`, enabled on `rpi5-8gb`; `core.metrics_address = 127.0.0.1:9100`,
+(`local.incus.metrics`, enabled on both Pis; `core.metrics_address = 127.0.0.1:9100`,
 `core.metrics_authentication = false`). That endpoint is HTTPS with Incus's own certificate, so the
 scrape skips TLS verification and never leaves the host - no firewall hole and no metrics client cert.
-Note: the listener is set imperatively by preseed, so removing it from config does not unset it on a
-running daemon (`incus config unset core.metrics_address`).
+Note: the preseed service is `PartOf=incus.service`, so it re-applies on every incus restart and
+reboot - not just at install. A deploy that only changes the preseed file does not restart incus
+(`RestartIfChanged=false`), so to pick it up immediately either restart `incus.service` or set the
+key by hand (`incus config set core.metrics_address=127.0.0.1:9100` +
+`incus config set core.metrics_authentication=false`). Removing a key from the preseed does not
+unset it; use `incus config unset`.
 
-Requires a `monitoring` record in the coredns zone (the workload repo) pointing at the monitoring
+Unbound and WireGuard exporters (`modules/dns.nix`, `modules/wireguard.nix`) run loopback-only and
+are scraped by the same agent (`job=unbound`, `job=wireguard`), adding query/cache/rcode and peer
+handshake/transfer series to the host dashboards.
+
+Requires a `monitoring` record in the network zone (the workload repo) pointing at the monitoring
 instance; until then the DNS name will not resolve.
 
 ## Decisions ledger (why each piece)
@@ -394,14 +438,17 @@ instance; until then the DNS name will not resolve.
 | Client auth | incus client cert trusted via preseed | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires |
 | Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall |
 | Guest memory budget | per-host (6 GiB / 2.5 GiB) | leaves headroom for host + zram on the 8/4 GB boards |
+| Bootstrap ZFS | disabled (`boot.supportedFilesystems.zfs = false`) | the upstream sd-image base profile enables ZFS, pulling in `zfs-kernel`; that needs the kernel's `dev` output, which is absent from the binary caches, forcing a full `linux-rpi` build per image. The installer only mounts btrfs/ext4/ESP |
 | VPN topology | router = WireGuard server; Pis = split-tunnel nodes (`10.6.0.0/24` only) | full tunnel (`0.0.0.0/0`) would route the host's and instances' traffic through the router and disturb direct LAN/instance paths; split tunnel keeps management/LAN direct while still reaching every VPN client |
-| VPN-reachable instances | separate `incusbr-vpn` bridge (`10.43.0.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
-| WireGuard key | sops secret `wg_private_key` | matches the existing sops pattern; never in the Nix store or git |
-| VPN DNS | split DNS: `~int.esselius.dev` to the bridge resolver `10.43.0.14`, registered on `incusbr-vpn` via systemd-resolved, LLMNR/mDNS off | scopes internal lookups without making normal DNS depend on the instance; must be on the bridge, not `wg0` (resolved binds link queries to the link, making an off-link resolver unreachable); LLMNR/mDNS are disabled because their unanswered reverse-lookup timeouts add ~10s to `ping`/lookups; openresolv/glibc cannot do per-domain forwarding, so `services.resolved` is required |
+| VPN-reachable instances | separate `incusbr-vpn` bridge per host (`10.43.0.0/24`, `10.43.1.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
+| WireGuard key | sops secrets `wg_private_key` (8gb), `wg_private_key_4gb` (4gb) | matches the existing sops pattern; never in the Nix store or git |
+| VPN DNS | host Unbound on the WireGuard address (`10.6.0.3` on 8gb, `10.6.0.5` on 4gb); 8gb is the authoritative secondary for the Incus AXFR zone, 4gb forwards to it over the direct peer; `cache`/`monitoring`/SRV static; host resolved routes only `~int` to it | keeps internet working when Incus or its zone transfer is down; the WireGuard address survives a failed Incus bridge, unlike `10.43.0.1`; LLMNR/mDNS off avoids reverse-lookup timeouts |
 | Direct WG peers | `local.wireguard.extraPeers` + fixed `listenPort`, key swap both ends | avoids the router hairpin and its double crypto; the peer's `/32` is more specific than the router's `vpnSubnet` so routing stays unambiguous; measured 225 -> ~900 Mbit/s aggregate over gigabit |
+| Cross-host instance routing | direct-peer `allowedIPs` carry `10.42.0.0/24` <-> `10.42.1.0/24` and `10.43.0.0/24` <-> `10.43.1.0/24` | routes over the LAN direct peer (no router dependency); default-bridge traffic stays NATed, while VPN-bridge traffic keeps real source IPs |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring agent | Grafana Alloy (`local.monitoringAgent`), node metrics + journal to `monitoring.int.esselius.dev` | self-hosted metrics/logs; reuses the `int.esselius.dev` split DNS so it is outbound-only |
 | Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated) | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs |
+| Metrics exporters | Unbound + WireGuard exporters, loopback-only, scraped by Alloy | query/cache/rcode and handshake/transfer visibility without exposing another listener on the LAN or `wg0` |
 
 ## Playbooks
 
@@ -411,7 +458,7 @@ is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollba
 
 These commands are wrapped as `task` targets in `Taskfile.yml` (`task --list` shows them all). Each
 honours `HOST` (default `rpi5-8gb`) and `IP` (default `192.168.50.80`), e.g.
-`task deploy HOST=rpi5-4gb IP=192.168.50.81`; `task install` is the hard reset, `task install:mount`
+`task deploy HOST=rpi5-4gb IP=192.168.50.33`; `task install` is the hard reset, `task install:mount`
 the soft reset, `task bootstrap`/`task flash DISK=/dev/rdiskX` handle the SD image.
 
 **Why root SSH can't be disabled on the bootstrap installer too**: tried this (disable root,
@@ -440,13 +487,19 @@ skipped and root SSH enabled, contained to a throwaway image that gets reflashed
 ### Install / hard reset (wipes NVMe, from the Mac)
 
 ```bash
-nix build .#images.rpi5-bootstrap
-zstd -d ./result/sd-image/*.img.zst -o pi5-bootstrap.img
-diskutil unmountDisk /dev/diskX   # macOS
-sudo dd if=pi5-bootstrap.img of=/dev/rdiskX bs=4M status=progress conv=fsync
+task bootstrap                    # nix build + decompress to pi5-bootstrap.img
+task flash DISK=/dev/rdiskX       # unmountDisk + dd (confirm the raw disk first)
 
 # boot the Pi (NVMe attached), then:
 nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb root@<pi-ip>
+```
+
+If the NVMe previously held a ZFS pool, the bootstrap's disabled ZFS means disko cannot
+`zpool destroy` it and its leftover label can make disko skip `mkfs.btrfs` (`unknown filesystem type
+'zfs_member'`). Wipe it first from the booted installer:
+
+```bash
+ssh admin@<pi-ip> 'sudo blkdiscard -f /dev/nvme0n1'
 ```
 
 That's it - no manual follow-up dance needed anymore (see "bootloader-install caveat" above:
@@ -585,6 +638,27 @@ Confirmed working on real hardware (8 GB board):
   `https://cache.int.esselius.dev/homelab/nix-cache-info` returns 200,
   `nix store ping --store https://cache.int.esselius.dev/homelab` succeeds, and Nix no longer logs
   `unable to get local issuer certificate` or retries the Attic substituter
+- `rpi5-4gb` from scratch: `nixos-anywhere` install, host deploy, and incus-native ACME issuance.
+  After adding its SSH host key to `.sops.yaml` and rekeying, `acme.enable = true` produced a
+  Let's Encrypt cert for `rpi5-4gb.x.esselius.dev` and `https://rpi5-4gb.x.esselius.dev:8443/`
+  returns 200
+- WireGuard on `rpi5-8gb`: `wg0` handshakes with the router (`latest handshake` in `wg show`),
+  routes `10.6.0.0/24`, and a VPN client (`10.6.0.4`) reaches `incusbr-vpn` instances
+  (`cache.int.esselius.dev`, `monitoring.int.esselius.dev`) with its real source IP preserved -
+  confirmed in the attic nginx access log
+- `rpi5-4gb` WireGuard/DNS/monitoring: `wg0` handshakes with both the router and `rpi5-8gb`
+  (`10.6.0.5` -> `10.6.0.3`), a VPN client reaches `10.6.0.5` and resolves
+  `homepage.int.esselius.dev` through its Unbound, and Alloy pushes node metrics plus journal to
+  VictoriaMetrics/Loki and scrapes Incus metrics (`count({host="rpi5-4gb"})` has both jobs)
+- Cross-host instance routing: a throwaway Alpine container on `rpi5-4gb` (`10.42.1.72`) was
+  reachable from the `rpi5-8gb` host and from its `attic`/`homepage` containers (`10.43.0.x`), and
+  it reached both workloads back over the direct peer (source masqueraded by `incusbr0`)
+- `rpi5-4gb`'s `incusbr-vpn` (`10.43.1.0/24`, `nat = false`): a test container (`10.43.1.57`) was
+  reachable from `attic`, and its real source IP appeared in attic's nginx access log (no NAT)
+- VPN client (`10.6.0.4`, `AllowedIPs = 10.6.0.0/24, 10.42.0.0/15`): both WG addresses, both
+  resolvers, both default bridges (`10.42.0.1`, `10.42.1.1`), both VPN bridges (`10.43.0.0/24`,
+  `10.43.1.0/24`), and a test container on 4gb's VPN bridge are all reachable
+- Both hosts report `job=unbound` and `job=wireguard` alongside the node and Incus scrape jobs
 
 Pre-flight tested from macOS (not on the Pi):
 
@@ -593,14 +667,6 @@ Pre-flight tested from macOS (not on the Pi):
 - GoDaddy DNS-01 against **Let's Encrypt staging**: creds authenticate, the `_acme-challenge`
   TXT record is written and served by GoDaddy's authoritative NS (and deleted); the only snag was
   recursive-resolver propagation lag (fixed via `LEGO_DNS_PROPAGATION_DISABLE_RNS`)
-
-Not yet verified on hardware:
-
-- the 4 GB host (`rpi5-8gb` is the one exercised so far): needs its SSH key as a sops recipient and
-  `acme.enable = true`
-- WireGuard client (`wg0`) on `rpi5-8gb`: handshake with the router, `10.6.0.0/24` route via `wg0`,
-  and `incusbr-vpn` instances reachable from another VPN client with the real instance source IP
-  preserved (also depends on the router-side peer route/forwarding above)
 
 ## Known risks
 
@@ -618,13 +684,12 @@ Not yet verified on hardware:
 - sops: a host whose SSH host key is not a recipient in `.sops.yaml` fails secret decryption at
   boot (so `incus.service` gets no GoDaddy creds and no cert is issued). Adding recipients means
   re-running `sops updatekeys secrets/rpi5.yaml` from a machine that can already decrypt.
-- VPN reachability depends on router-side config that lives outside this repo (each Pi peer's
-  `AllowedIPs` must include the incus subnet, and forwarding between VPN clients and it must be
-  permitted). A missing route or forward rule presents as "the Pi's wg IP pings, an instance
-  doesn't".
+- VPN-client -> instance reachability depends on router-side config outside this repo (the Pi
+  peer's `AllowedIPs` must include the incus subnet, and forwarding must be permitted). A missing
+  route or forward rule presents as "the Pi's wg IP pings, an instance doesn't". Cross-host
+  instance traffic does not depend on this - it uses the direct peer.
 - The WireGuard keys live in the shared `secrets/rpi5.yaml`, which every age recipient can fully
-  decrypt; a future `rpi5-4gb` key must therefore use its own name rather than reuse
-  `wg_private_key`.
+  decrypt; keep them per host (`wg_private_key`, `wg_private_key_4gb`) rather than reusing a key.
 - ACME: DNS-01 depends on GoDaddy API availability and is subject to Let's Encrypt rate limits. The
   client still needs an A record for the name to connect; validation itself does not.
 - Internal TLS trust is pinned to the Esselius root CA (`certs/esselius-root-ca.crt`). Rotating the

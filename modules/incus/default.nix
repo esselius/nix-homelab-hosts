@@ -10,6 +10,7 @@
     ./storage.nix
     ./profiles.nix
     ./tls.nix
+    ./dns.nix
     ./preseed.nix
   ];
 

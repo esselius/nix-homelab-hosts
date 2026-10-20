@@ -17,6 +17,24 @@ let
       forward_to   = [prometheus.relabel.host.receiver]
     }
   '';
+
+  # Unbound and WireGuard exporters listen on loopback; scrape them here so
+  # their metrics get the same host label as the rest of the host's series.
+  unboundScrape = lib.optionalString config.services.prometheus.exporters.unbound.enable ''
+    prometheus.scrape "unbound" {
+      targets    = [{ __address__ = "127.0.0.1:${toString config.services.prometheus.exporters.unbound.port}" }]
+      job_name   = "unbound"
+      forward_to = [prometheus.relabel.host.receiver]
+    }
+  '';
+
+  wireguardScrape = lib.optionalString config.services.prometheus.exporters.wireguard.enable ''
+    prometheus.scrape "wireguard" {
+      targets    = [{ __address__ = "127.0.0.1:${toString config.services.prometheus.exporters.wireguard.port}" }]
+      job_name   = "wireguard"
+      forward_to = [prometheus.relabel.host.receiver]
+    }
+  '';
 in
 {
   options.local.monitoringAgent = {
@@ -84,6 +102,8 @@ in
       }
 
       ${incusScrape}
+      ${unboundScrape}
+      ${wireguardScrape}
 
       prometheus.relabel "host" {
         forward_to = [prometheus.remote_write.default.receiver]

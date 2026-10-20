@@ -30,5 +30,11 @@
 
   environment.systemPackages = with pkgs; [ vim ];
 
+  # The sd-image module pulls in nixos/modules/profiles/base.nix, which enables
+  # ZFS. zfs-kernel needs the kernel's `dev` output, which is not in the binary
+  # caches (only out/modules are), so leaving it on forces a full linux-rpi
+  # build. The installer only ever mounts btrfs/ext4/ESP, so drop it.
+  boot.supportedFilesystems.zfs = false;
+
   system.stateVersion = "26.05";
 }
