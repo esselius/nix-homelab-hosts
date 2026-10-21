@@ -116,7 +116,26 @@
           '';
         };
 
-      formatter.aarch64-darwin = nixpkgs.legacyPackages.aarch64-darwin.nixfmt;
+      formatter.aarch64-darwin =
+        let
+          pkgs = nixpkgs.legacyPackages.aarch64-darwin;
+        in
+        pkgs.writeShellApplication {
+          name = "fmt-nix-homelab-hosts";
+          runtimeInputs = [
+            pkgs.fd
+            pkgs.nixfmt
+          ];
+          text = ''
+            if [ "$#" -eq 0 ]; then
+              fd --extension nix --exec nixfmt {}
+            elif [ "$1" = "--check" ]; then
+              fd --extension nix --exec nixfmt --check {}
+            else
+              nixfmt "$@"
+            fi
+          '';
+        };
 
       checks.aarch64-darwin =
         let
@@ -162,7 +181,7 @@
               }
               ''
                 cd "$src"
-                shellcheck modules/scripts/*.sh
+                shellcheck modules/scripts/*.sh scripts/*.sh
                 touch $out
               '';
         };
