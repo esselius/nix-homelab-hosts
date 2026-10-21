@@ -1,11 +1,27 @@
 creation_rules:
-  - path_regex: secrets/.*\.ya?ml$
+  # Shared infrastructure secrets (GoDaddy ACME credentials) are readable by
+  # both hosts plus the Mac. Keep shared material here, not in a host file.
+  - path_regex: secrets/shared/.*\.ya?ml$
     key_groups:
       - age:
           # Each Pi's SSH host key, converted to age (ssh-keyscan <ip> | ssh-to-age):
-          - age1d8sutmfp9ew327lp5mnkncqa2y9dan4cfx80dxsdlsd2njzqzaus6wlr3e # 192.168.50.80
-          - age1q0kwlktcdcd8xzv7naz0k5t5d7u37pcue0xykr3xnrwq0mj9q9vqkn2clq # 192.168.50.33
+          - age1d8sutmfp9ew327lp5mnkncqa2y9dan4cfx80dxsdlsd2njzqzaus6wlr3e # rpi5-8gb (192.168.50.80)
+          - age1q0kwlktcdcd8xzv7naz0k5t5d7u37pcue0xykr3xnrwq0mj9q9vqkn2clq # rpi5-4gb (192.168.50.33)
           # Mac's local SSH key. sops 3.13.3 does not read ~/.ssh/id_ed25519
           # directly; the devshell's shellHook sets SOPS_AGE_KEY_CMD to derive
           # an age identity from it (see flake.nix).
+          - age1tc32kf0zh3xtkuu4j6eh9swskyvjlxfxx0q997mgrtl075fn9p8sgy94av # Mac
+
+  # Per-host secrets are readable only by that host and the Mac. Each host
+  # points at its file via local.wireguard.sopsFile in hosts/<host>.nix.
+  - path_regex: secrets/rpi5-8gb\.ya?ml$
+    key_groups:
+      - age:
+          - age1d8sutmfp9ew327lp5mnkncqa2y9dan4cfx80dxsdlsd2njzqzaus6wlr3e # rpi5-8gb
+          - age1tc32kf0zh3xtkuu4j6eh9swskyvjlxfxx0q997mgrtl075fn9p8sgy94av # Mac
+
+  - path_regex: secrets/rpi5-4gb\.ya?ml$
+    key_groups:
+      - age:
+          - age1q0kwlktcdcd8xzv7naz0k5t5d7u37pcue0xykr3xnrwq0mj9q9vqkn2clq # rpi5-4gb
           - age1tc32kf0zh3xtkuu4j6eh9swskyvjlxfxx0q997mgrtl075fn9p8sgy94av # Mac

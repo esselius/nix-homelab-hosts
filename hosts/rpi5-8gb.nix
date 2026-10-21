@@ -5,6 +5,8 @@
 
   local.wireguard = {
     enable = true;
+    # Per-host secret file; only this Pi's key is in it.
+    sopsFile = ../secrets/rpi5-8gb.yaml;
     # Split-tunnel node on the router's WireGuard server (not a full-tunnel
     # client): only the VPN subnet is routed via wg0.
     address = "10.6.0.3/32";

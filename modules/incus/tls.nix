@@ -65,7 +65,9 @@ in
       "acme.agree_tos" = "true";
     };
 
-    sops.secrets.${cfg.acme.sopsSecret} = lib.mkIf cfg.acme.enable { };
+    sops.secrets.${cfg.acme.sopsSecret} = lib.mkIf cfg.acme.enable {
+      sopsFile = ../../secrets/shared/godaddy.yaml;
+    };
 
     # lego reads the GoDaddy creds from the daemon's environment.
     systemd.services.incus.serviceConfig.EnvironmentFile =

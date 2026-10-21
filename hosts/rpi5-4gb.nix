@@ -4,6 +4,8 @@
 
   local.wireguard = {
     enable = true;
+    # Per-host secret file; only this Pi's key is in it.
+    sopsFile = ../secrets/rpi5-4gb.yaml;
     # Split-tunnel node on the router's WireGuard server, same shape as
     # rpi5-8gb. The router needs a peer for this key (see README).
     address = "10.6.0.5/32";

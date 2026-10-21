@@ -22,7 +22,19 @@ in
     privateKeySecret = lib.mkOption {
       type = lib.types.str;
       default = "wg_private_key";
-      description = "sops secret (in secrets/rpi5.yaml) holding this host's base64 WireGuard private key.";
+      description = ''
+        sops secret holding this host's base64 WireGuard private key. Read from
+        the per-host `sopsFile` below, not a shared file.
+      '';
+    };
+
+    sopsFile = lib.mkOption {
+      type = lib.types.path;
+      description = ''
+        Encrypted per-host sops file containing `privateKeySecret`
+        (e.g. ../secrets/rpi5-8gb.yaml). Set by each host; it is deliberately
+        explicit so a host can never fall back to another host's key file.
+      '';
     };
 
     serverPublicKey = lib.mkOption {
@@ -100,7 +112,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    sops.secrets.${cfg.privateKeySecret} = { };
+    sops.secrets.${cfg.privateKeySecret} = {
+      sopsFile = cfg.sopsFile;
+    };
 
     networking.wireguard.interfaces.wg0 = {
       ips = [ cfg.address ];
