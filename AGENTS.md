@@ -17,10 +17,9 @@ workloads live here - those run as incus instances.
   everything else belongs in `modules/`.
 - This repo documents *why*, not just what: keep the README's decisions ledger,
   "Known risks", and verification status in sync with config changes.
-- Run `task fmt` and `nix flake check` before committing. Both are wired into
-  the flake (`formatter`, `checks.eval-all`, `checks.fmt`,
-  `checks.shellcheck`). Pass files to `nix fmt` (as `task fmt` does): bare
-  `nix fmt` reads stdin on recent Nix.
+- Run `task fmt` and `nix flake check` before committing. `nix fmt` (and
+  `task fmt`) formats the tree via the flake formatter; `nix flake check` covers
+  `checks.eval-all`, `checks.fmt`, and `checks.shellcheck`.
 - Never commit plaintext secrets. `secrets/rpi5.yaml` is sops-encrypted; edit it
   only inside `nix develop` (whose shellHook sets `SOPS_AGE_KEY_CMD`).
 - Deploy with `--target-host` only; no `--build-host` needed on the normal path
@@ -28,3 +27,9 @@ workloads live here - those run as incus instances.
   `nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<ip> --sudo`.
   `task deploy` adds `--build-host <target>` only in its Cachix-unreachable
   fallback, to build on the host itself.
+- Host addresses live in `inventory.nix`; resolve them with
+  `scripts/host-ip.sh <host>` (the Taskfile does). Never add another independent
+  IP default. `task deploy` refuses a dirty worktree (`ALLOW_DIRTY=1` overrides),
+  runs `nix flake check`, and then `scripts/verify-host.sh`; a failed verify
+  fails the deploy (`AUTO_ROLLBACK=1` reverts, or use `task rollback`).
+  Destructive tasks require `CONFIRM=WIPE|MOUNT|FLASH`.

@@ -472,10 +472,12 @@ instance; until then the DNS name will not resolve.
 `nixos-anywhere` itself). Once a main system (`rpi5-8gb`/`rpi5-4gb`) is actually running, root SSH
 is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollback" below).
 
-These commands are wrapped as `task` targets in `Taskfile.yml` (`task --list` shows them all). Each
-honours `HOST` (default `rpi5-8gb`) and `IP` (default `192.168.50.80`), e.g.
-`task deploy HOST=rpi5-4gb IP=192.168.50.33`; `task install` is the hard reset, `task install:mount`
-the soft reset, `task bootstrap`/`task flash DISK=/dev/rdiskX` handle the SD image.
+These commands are wrapped as `task` targets in `Taskfile.yml` (`task --list` shows them all).
+`HOST` (default `rpi5-8gb`) is the source of truth; the address comes from `inventory.nix`, e.g.
+`task deploy HOST=rpi5-4gb`. Set `IP=` only for a temporary/bootstrap address, and then also
+`ALLOW_IP_OVERRIDE=1`; a mismatched `HOST`/`IP` is refused. `task install` is the hard reset
+(needs `CONFIRM=WIPE`), `task install:mount` the soft reset (needs `CONFIRM=MOUNT`), and
+`task flash DISK=/dev/rdiskX` writes the SD image (needs `CONFIRM=FLASH`).
 
 **Why root SSH can't be disabled on the bootstrap installer too**: tried this (disable root,
 `admin@` + passwordless sudo, same as the main systems) and it fails specifically for
@@ -504,10 +506,10 @@ skipped and root SSH enabled, contained to a throwaway image that gets reflashed
 
 ```bash
 task bootstrap                    # nix build + decompress to pi5-bootstrap.img
-task flash DISK=/dev/rdiskX       # unmountDisk + dd (confirm the raw disk first)
+CONFIRM=FLASH task flash DISK=/dev/rdiskX   # unmountDisk + dd
 
 # boot the Pi (NVMe attached), then:
-nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb root@<pi-ip>
+CONFIRM=WIPE task install HOST=rpi5-8gb
 ```
 
 If the NVMe previously held a ZFS pool, the bootstrap's disabled ZFS means disko cannot
@@ -529,7 +531,7 @@ If the Mac build host misbehaves during install, pre-build the disko script + to
 
 ```bash
 # reflash the bootstrap image as above, boot the Pi, then:
-nix run github:nix-community/nixos-anywhere -- --flake .#rpi5-8gb --disko-mode mount root@<pi-ip>
+CONFIRM=MOUNT task install:mount HOST=rpi5-8gb
 ```
 
 `--disko-mode mount` mounts the *existing* NVMe partitions and the SD card without destroying
@@ -580,8 +582,17 @@ Root SSH login is disabled on the main systems (`PermitRootLogin = "no"`, `modul
 ```bash
 nix flake update          # deliberate bumps only
 task cache-push           # push the host closure to Cachix (and Attic if up)
-task deploy               # Mac builds; the Pi pulls, else builds on-target
+task deploy               # builds (or substitutes), switches, then verifies
+task verify               # re-run the smoke test on demand
+task rollback             # previous NixOS generation + verify
 ```
+
+`task deploy` refuses a dirty worktree (override with `ALLOW_DIRTY=1`), runs
+`nix flake check` first (skip with `SKIP_CHECK=1`), passes `--diff` to show
+changed units, then runs `scripts/verify-host.sh`: systemd state/failed units,
+the current system closure, the extlinux entry, incus, `incusbr0`, and cache
+reachability. A failed verify leaves the deploy failed; set `AUTO_ROLLBACK=1` to
+also switch back immediately, or run `task rollback` afterwards.
 
 Substituters are layered so a host deploy never depends on the cluster
 (`modules/nix-cache.nix`): **Cachix** (external, always up - holds the vendor
@@ -599,9 +610,10 @@ to `security.pki.certificateFiles`, and `modules/nix-cache.nix` pins the cache's
 narinfo key. Both are public material. Without the root, every Nix invocation on
 the host logs `unable to get local issuer certificate` and silently skips Attic.
 
-Rollback after a bad update: choose the previous generation at the U-Boot prompt (extlinux menu, SD
-p2). Root state is irrelevant (impermanence), so rollback is purely about kernel/generation
-correctness.
+Rollback after a bad *activation*: `task rollback` switches to the previous
+generation on the running host. If the host does not boot, choose the previous
+generation at the U-Boot prompt (extlinux menu, SD p2). Root state is irrelevant
+(impermanence), so rollback is purely about kernel/generation correctness.
 
 ### Recovery (pick the narrowest one that applies)
 
