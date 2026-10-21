@@ -84,6 +84,10 @@
 
       images.rpi5-bootstrap = self.nixosConfigurations."rpi5-bootstrap".config.system.build.sdImage;
 
+      # Pin the installer to this flake's nixpkgs instead of `nix run github:...`
+      # (which fetches whatever main happens to be).
+      packages.aarch64-darwin.nixos-anywhere = nixpkgs.legacyPackages.aarch64-darwin.nixos-anywhere;
+
       devShells.aarch64-darwin.default =
         let
           pkgs = nixpkgs.legacyPackages.aarch64-darwin;
@@ -93,7 +97,7 @@
             # incus-lts.client builds on darwin (platforms = linux ++ darwin),
             # so the Mac gets the CLI to drive the Pis over the remote API.
             pkgs.incus-lts.client
-            # Secrets workflow: edit/rotate secrets/rpi5.yaml.
+            # Secrets workflow: edit/rotate secrets/<host>.yaml and secrets/shared/.
             pkgs.sops
             pkgs.age
             # Convert each Pi's SSH host key into an age recipient.
@@ -137,53 +141,62 @@
           '';
         };
 
-      checks.aarch64-darwin =
+      checks =
         let
-          pkgs = nixpkgs.legacyPackages.aarch64-darwin;
-          # Eval does not require the target platform, so a Darwin `nix flake
-          # check` can still prove the aarch64-linux hosts evaluate.
-          hostDrvs =
-            map (c: c.config.system.build.toplevel) (builtins.attrValues self.nixosConfigurations)
-            ++ [ self.images.rpi5-bootstrap ];
+          # The same checks on both platforms: eval must not depend on the build
+          # platform, and fmt/shellcheck are platform-independent. Linux runners
+          # then exercise checks.aarch64-linux instead of silently skipping it.
+          mkChecks =
+            system:
+            let
+              pkgs = nixpkgs.legacyPackages.${system};
+              hostDrvs =
+                map (c: c.config.system.build.toplevel) (builtins.attrValues self.nixosConfigurations)
+                ++ [ self.images.rpi5-bootstrap ];
+            in
+            {
+              # Force evaluation of every host's toplevel drvPath (eval, not build):
+              # fails here if any host stops evaluating.
+              eval-all = builtins.deepSeq (map (d: d.drvPath) hostDrvs) (
+                pkgs.runCommand "eval-all" { } ''
+                  touch $out
+                ''
+              );
+
+              # Formatting gate, matching `nix fmt`.
+              fmt =
+                pkgs.runCommand "fmt-check"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.fd
+                      pkgs.nixfmt
+                    ];
+                    src = self;
+                  }
+                  ''
+                    cd "$src"
+                    fd --extension nix --exec nixfmt --check {}
+                    touch $out
+                  '';
+
+              # The hand-written shell (node_exporter textfile collectors) is the
+              # one layer `nix fmt` does not cover.
+              shellcheck =
+                pkgs.runCommand "shellcheck"
+                  {
+                    nativeBuildInputs = [ pkgs.shellcheck ];
+                    src = self;
+                  }
+                  ''
+                    cd "$src"
+                    shellcheck modules/scripts/*.sh scripts/*.sh
+                    touch $out
+                  '';
+            };
         in
         {
-          # Force evaluation of every host's toplevel drvPath (eval, not build):
-          # fails here if any host stops evaluating.
-          eval-all = builtins.deepSeq (map (d: d.drvPath) hostDrvs) (
-            pkgs.runCommand "eval-all" { } ''
-              touch $out
-            ''
-          );
-
-          # Formatting gate, matching `nix fmt`.
-          fmt =
-            pkgs.runCommand "fmt-check"
-              {
-                nativeBuildInputs = [
-                  pkgs.fd
-                  pkgs.nixfmt
-                ];
-                src = self;
-              }
-              ''
-                cd "$src"
-                fd --extension nix --exec nixfmt --check {}
-                touch $out
-              '';
-
-          # The hand-written shell (node_exporter textfile collectors) is the
-          # one layer `nix fmt` does not cover.
-          shellcheck =
-            pkgs.runCommand "shellcheck"
-              {
-                nativeBuildInputs = [ pkgs.shellcheck ];
-                src = self;
-              }
-              ''
-                cd "$src"
-                shellcheck modules/scripts/*.sh scripts/*.sh
-                touch $out
-              '';
+          aarch64-darwin = mkChecks "aarch64-darwin";
+          aarch64-linux = mkChecks "aarch64-linux";
         };
     };
 }

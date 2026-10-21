@@ -33,21 +33,20 @@ tasks:
           nix flake check
         fi
 
-        # The host is bootstrap-critical: its deploy must never depend on the
-        # Attic cache, which runs as a guest *on* this cluster. The substituters
-        # are layered (see modules/nix-cache.nix):
-        #   Cachix (external, always up) -> Attic (local, best-effort) ->
-        #   on-target build (last resort).
-        # If the external cache answers, the Mac (via linux-builder) builds and
-        # the host substitutes the closure (--use-substitutes); warm it with
-        # `task cache-push` first. If not, build the closure on the host itself -
-        # it already has the vendor kernel in its store.
-        if curl -fsS --max-time 5 https://esselius.cachix.org/nix-cache-info >/dev/null 2>&1; then
-          echo "cache reachable - building on the Mac; the host substitutes"
-          nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
+        # Probe the exact closure, not just the cache endpoint: a reachable
+        # Cachix can still be missing the vendor-kernel closure. On an exact
+        # hit, realize it locally from Cachix and activate the store path; on a
+        # miss, build on the target, which already has the vendor kernel.
+        system="$(nix eval --raw ".#nixosConfigurations.{{.HOST}}.config.system.build.toplevel.outPath")"
+        if nix path-info --store https://esselius.cachix.org "$system" \
+          --option narinfo-cache-negative-ttl 0 >/dev/null 2>&1; then
+          echo "exact closure in Cachix - building locally; the host substitutes"
+          nix build ".#nixosConfigurations.{{.HOST}}.config.system.build.toplevel" \
+            --no-link --accept-flake-config
+          nixos-rebuild switch --store-path "$system" \
             --target-host "{{.ADMIN}}@$ip" --use-substitutes --sudo --diff
         else
-          echo "cache unreachable - falling back to an on-target build"
+          echo "exact closure not in Cachix - falling back to an on-target build"
           nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
             --target-host "{{.ADMIN}}@$ip" --build-host "{{.ADMIN}}@$ip" --sudo --diff
         fi
@@ -116,7 +115,7 @@ tasks:
           exit 1
         fi
         nix flake check
-        nix run github:nix-community/nixos-anywhere -- \
+        nix run {{.FLAKE}}#nixos-anywhere -- \
           --flake {{.FLAKE}}#{{.HOST}} "root@$ip"
 
   install:mount:
@@ -134,7 +133,7 @@ tasks:
           exit 1
         fi
         nix flake check
-        nix run github:nix-community/nixos-anywhere -- \
+        nix run {{.FLAKE}}#nixos-anywhere -- \
           --flake {{.FLAKE}}#{{.HOST}} --disko-mode mount "root@$ip"
 
   bootstrap:
@@ -206,11 +205,15 @@ tasks:
       - nix fmt
 
   secrets:edit:
-    desc: Edit secrets/rpi5.yaml (devshell provides the age identity)
+    desc: 'Edit a secret file, e.g. task secrets:edit FILE=secrets/rpi5-8gb.yaml'
+    requires:
+      vars: [FILE]
     cmds:
-      - nix develop {{.FLAKE}} -c sops secrets/rpi5.yaml
+      - nix develop {{.FLAKE}} -c sops {{.FILE}}
 
   secrets:updatekeys:
-    desc: Re-key secrets/rpi5.yaml after adding/removing recipients
+    desc: 'Re-key a secret file after adding/removing recipients, e.g. FILE=secrets/rpi5-8gb.yaml'
+    requires:
+      vars: [FILE]
     cmds:
-      - nix develop {{.FLAKE}} -c sops updatekeys secrets/rpi5.yaml
+      - nix develop {{.FLAKE}} -c sops updatekeys {{.FILE}}

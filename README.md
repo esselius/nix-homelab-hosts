@@ -550,13 +550,21 @@ installed before it can decrypt the GoDaddy secret:
 nix develop
 ssh admin@<pi-ip> sudo cat /etc/ssh/ssh_host_ed25519_key.pub | ssh-to-age   # -> .sops.yaml
 
-# create / rekey the secret (run inside `nix develop`, whose shellHook sets
+# create/rekey the files (run inside `nix develop`, whose shellHook sets
 # SOPS_AGE_KEY_CMD to derive an age identity from ~/.ssh/id_ed25519):
-sops secrets/rpi5.yaml              # godaddy_acme: |
-                                    #   GODADDY_API_KEY=...
-                                    #   GODADDY_API_SECRET=...
-sops updatekeys secrets/rpi5.yaml   # re-run after adding/removing recipients
+sops secrets/rpi5-8gb.yaml              # wg_private_key: <base64>
+sops secrets/rpi5-4gb.yaml              # wg_private_key_4gb: <base64>
+sops secrets/shared/godaddy.yaml        # godaddy_acme: |
+                                        #   GODADDY_API_KEY=...
+                                        #   GODADDY_API_SECRET=...
+sops updatekeys secrets/rpi5-8gb.yaml   # after adding/removing recipients
+sops updatekeys secrets/shared/godaddy.yaml
 ```
+
+The per-host file is readable only by that Pi and the Mac; the shared file is
+readable by both Pis and the Mac. Each host sets `local.wireguard.sopsFile` in
+`hosts/<host>.nix`, and `modules/incus/tls.nix` reads the shared ACME
+credentials.
 
 ACME is already enabled by default (`modules/site.nix`); once the key is a recipient, rebuild and
 the cert is issued. The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for
@@ -597,12 +605,14 @@ also switch back immediately, or run `task rollback` afterwards.
 Substituters are layered so a host deploy never depends on the cluster
 (`modules/nix-cache.nix`): **Cachix** (external, always up - holds the vendor
 kernel), then the local **Attic** workload (best-effort), then an **on-target
-build** as the last resort. `task deploy` probes Cachix: if it answers, the Mac
-(via `linux-builder`) builds and the Pi pulls the closure (`--use-substitutes`);
-otherwise it builds the closure on the Pi itself, which already has the vendor
-kernel in its store. Warm the external cache with `task cache-push` first
-(`cachix authtoken` once). See the nix-workloads README ("Build cache (Attic)")
-for the local cache's one-time bootstrap.
+build** as the last resort. `task deploy` probes the *exact* toplevel path with
+`nix path-info --store https://esselius.cachix.org`: on a hit it realizes the
+closure locally (from Cachix) and activates the store path with
+`--use-substitutes`; on a miss it builds on the Pi itself, which already has the
+vendor kernel in its store. A reachable cache endpoint is not enough - a missing
+vendor-kernel closure takes the on-target path. Warm the external cache with
+`task cache-push` first (`cachix authtoken` once). See the nix-workloads README
+("Build cache (Attic)") for the local cache's one-time bootstrap.
 
 The Pi must verify Attic's certificate: `modules/pki.nix` adds the vendored
 Esselius root CA (`certs/esselius-root-ca.crt`, a copy of `konfig/root_ca.crt`)
@@ -688,8 +698,8 @@ Confirmed working on real hardware (8 GB board):
 
 Pre-flight tested from macOS (not on the Pi):
 
-- sops decrypts `secrets/rpi5.yaml` via the SSH-key-derived age identity (devshell
-  `SOPS_AGE_KEY_CMD`), yielding `GODADDY_API_KEY` / `GODADDY_API_SECRET`
+- sops decrypts `secrets/*.yaml` via the SSH-key-derived age identity (devshell
+  `SOPS_AGE_KEY_CMD`); the shared ACME file yields `GODADDY_API_KEY` / `GODADDY_API_SECRET`
 - GoDaddy DNS-01 against **Let's Encrypt staging**: creds authenticate, the `_acme-challenge`
   TXT record is written and served by GoDaddy's authoritative NS (and deleted); the only snag was
   recursive-resolver propagation lag (fixed via `LEGO_DNS_PROPAGATION_DISABLE_RNS`)
@@ -713,13 +723,15 @@ Pre-flight tested from macOS (not on the Pi):
   update` that bumps nixos-hardware can mean a multi-hour local kernel build.
 - sops: a host whose SSH host key is not a recipient in `.sops.yaml` fails secret decryption at
   boot (so `incus.service` gets no GoDaddy creds and no cert is issued). Adding recipients means
-  re-running `sops updatekeys secrets/rpi5.yaml` from a machine that can already decrypt.
+  re-running `sops updatekeys` on that host's `secrets/<host>.yaml` (and
+  `secrets/shared/godaddy.yaml`) from a machine that can already decrypt.
 - VPN-client -> instance reachability depends on router-side config outside this repo (the Pi
   peer's `AllowedIPs` must include the incus subnet, and forwarding must be permitted). A missing
   route or forward rule presents as "the Pi's wg IP pings, an instance doesn't". Cross-host
   instance traffic does not depend on this - it uses the direct peer.
-- The WireGuard keys live in the shared `secrets/rpi5.yaml`, which every age recipient can fully
-  decrypt; keep them per host (`wg_private_key`, `wg_private_key_4gb`) rather than reusing a key.
+- The GoDaddy ACME credentials are shared by both hosts (`secrets/shared/godaddy.yaml`); the
+  WireGuard keys are per host (`secrets/rpi5-8gb.yaml`, `secrets/rpi5-4gb.yaml`) and not readable
+  by the other Pi.
 - ACME: DNS-01 depends on GoDaddy API availability and is subject to Let's Encrypt rate limits. The
   client still needs an A record for the name to connect; validation itself does not.
 - Internal TLS trust is pinned to the Esselius root CA (`certs/esselius-root-ca.crt`). Rotating the

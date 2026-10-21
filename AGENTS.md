@@ -20,16 +20,22 @@ workloads live here - those run as incus instances.
 - Run `task fmt` and `nix flake check` before committing. `nix fmt` (and
   `task fmt`) formats the tree via the flake formatter; `nix flake check` covers
   `checks.eval-all`, `checks.fmt`, and `checks.shellcheck`.
-- Never commit plaintext secrets. `secrets/rpi5.yaml` is sops-encrypted; edit it
-  only inside `nix develop` (whose shellHook sets `SOPS_AGE_KEY_CMD`).
+- Never commit plaintext secrets. `secrets/<host>.yaml` is the per-host file
+  (WireGuard key) and `secrets/shared/` holds cross-host material (GoDaddy ACME
+  credentials); both are sops-encrypted. Edit them only inside `nix develop`
+  (whose shellHook sets `SOPS_AGE_KEY_CMD`), via
+  `task secrets:edit FILE=secrets/<host>.yaml`.
 - Deploy with `--target-host` only; no `--build-host` needed on the normal path
   (Nix builds via the configured aarch64-linux builder):
   `nixos-rebuild switch --flake .#rpi5-8gb --target-host admin@<ip> --sudo`.
-  `task deploy` adds `--build-host <target>` only in its Cachix-unreachable
-  fallback, to build on the host itself.
+  `task deploy` probes the exact toplevel in Cachix; on a miss it adds
+  `--build-host <target>` to build on the host itself.
 - Host addresses live in `inventory.nix`; resolve them with
   `scripts/host-ip.sh <host>` (the Taskfile does). Never add another independent
   IP default. `task deploy` refuses a dirty worktree (`ALLOW_DIRTY=1` overrides),
   runs `nix flake check`, and then `scripts/verify-host.sh`; a failed verify
   fails the deploy (`AUTO_ROLLBACK=1` reverts, or use `task rollback`).
   Destructive tasks require `CONFIRM=WIPE|MOUNT|FLASH`.
+- CI (`.github/workflows/ci.yml`) runs `nix flake check` on `macos-14` and a
+  native `ubuntu-24.04-arm` runner; the latter exercises
+  `checks.aarch64-linux`. Keep both platform check sets in sync via `mkChecks`.
