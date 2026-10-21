@@ -71,7 +71,7 @@ NVMe (the only disk disko / `nixos-anywhere` ever wipes):
 |--------|-------|----------|
 | `@root` | `/` | rolled back to pristine at every boot (impermanence, btrfs recipe - no tmpfs, RAM matters on 4/8 GB) |
 | `@nix` | `/nix` | persists |
-| `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/log` + persistent journald. Deliberately **not** persisted: `/etc/nixos` + `/etc/nix` (declarative, and a flake checkout doesn't belong in `/etc/nixos`), `/root`, `/home` |
+| `@persist` | `/persist` | survives reboots: `machine-id`, SSH host keys, `/var/lib/nixos` (UID/GID maps), `/var/lib/incus`, `/var/lib/unbound` (AXFR secondary zonefile), `/var/log` + persistent journald. Deliberately **not** persisted: `/etc/nixos` + `/etc/nix` (declarative, and a flake checkout doesn't belong in `/etc/nixos`), `/root`, `/home` |
 | `@snapshots` | `/snapshots` | snapper's snapshot store for `/persist` (also bind-mounted at `/persist/.snapshots` - see note) |
 
 snapper: `services.snapper.configs."persist"` snapshots `/persist` on a nightly timeline
@@ -139,19 +139,25 @@ empty. Several non-obvious things had to be fixed empirically:
 ### incus
 
 Config lives in `modules/incus/`, split by concern. Hosts tune only
-`local.incus.{network,guest,tls}`; each file contributes to an internal `local.incus.spec`, and
-`preseed.nix` is the single place that assembles the freeform `virtualisation.incus.preseed` value
-(this avoids depending on how the freeform submodule merges list attributes defined across separate
-modules). Host networking for the VPN lives outside this directory, in `modules/wireguard.nix`,
-tuned via `local.wireguard` - see "WireGuard VPN" below.
+`local.incus.{network,guest,tls,dnsAddress,metrics}`; each file contributes to an internal
+`local.incus.spec`, and `preseed.nix` is the single place that assembles the freeform
+`virtualisation.incus.preseed` value (this avoids depending on how the freeform submodule merges
+list attributes defined across separate modules). Settings that must be applied idempotently at
+runtime (`core.dns_address`, `core.metrics_*`, the network DNS zone) live in `runtime.nix` instead,
+so a deploy applies them without restarting incus. Host networking for the VPN lives outside this
+directory, in `modules/wireguard.nix`, tuned via `local.wireguard` - see "WireGuard VPN" below.
+Site-wide values shared by both hosts (VPN server identity, DNS zone, bootstrap records, TLS/monitoring
+toggles) live in `modules/site.nix` and are wired in with `mkDefault`.
 
 | File | Concern |
 |------|---------|
 | `default.nix` | enable, `pkgs.incus-lts`, UI, `incus-admin` group; declares the `local.incus.spec` interface |
 | `network.nix` | managed bridge, explicit subnets, optional macvlan profile, firewall |
+| `vpn-bridge.nix` | optional `incusbr-vpn` bridge + `vpn` profile, uplink-scoped egress masquerade |
 | `storage.nix` | btrfs `default` pool at `/persist/incus-pool` |
 | `profiles.nix` | `default`/`container`/`vm` profiles from a per-host RAM budget |
 | `tls.nix` | Let's Encrypt server cert (GoDaddy DNS-01) + trusted client certs |
+| `runtime.nix` | idempotent `incus config set` for DNS + metrics (no incus restart needed) |
 | `preseed.nix` | assembles `virtualisation.incus.preseed` |
 
 - `virtualisation.incus`, `pkgs.incus-lts`, `ui.enable = true`.
@@ -180,8 +186,11 @@ tuned via `local.wireguard` - see "WireGuard VPN" below.
   `rpi5-8gb` = `10.42.0.1/24` + `fd42:0::1/64`, `rpi5-4gb` = `10.42.1.1/24` + `fd42:1::1/64`. Keeps
   addressing predictable and non-colliding if the pair is ever routed.
 - A second, NAT-less bridge `incusbr-vpn` carries instances that must be reachable from other
-  WireGuard VPN clients - see "WireGuard VPN" below.
-- `incusbr0` is in `networking.firewall.trustedInterfaces`; the API/UI port `8443` is opened.
+  WireGuard VPN clients - see "WireGuard VPN" below. Its network address is derived from
+  `local.incus.network.vpn.ipv4` (never configured separately), so the bridge and the egress
+  masquerade cannot drift apart.
+- `incusbr0` is in `networking.firewall.trustedInterfaces`; the API/UI port is opened from
+  `local.incus.httpsPort` (default `8443`), the same option that sets `core.https_address`.
 - Optional `local.incus.network.macvlan` emits a `lan` profile (`nictype = macvlan`, `parent =
   end0`) for instances that should be first-class LAN citizens (own MAC, router DHCP). Apply with
   `incus launch ... -p default -p lan`; the later profile overrides `default`'s bridged `eth0`
@@ -196,8 +205,10 @@ tuned via `local.wireguard` - see "WireGuard VPN" below.
   host budget, `limits.memory.enforce = hard` - without hard enforcement a runaway container can
   still OOM the host) and `vm` (75%), both with `limits.cpu` = core count. `vm` is only emitted when
   `local.incus.guest.vms = true` (the 4 GB board is containers-only).
-- Host budgets (`local.incus.guest.memoryMiB`): `rpi5-8gb` 6144 (~2 GB left for host + zram),
-  `rpi5-4gb` 2560.
+- These are **per-instance ceilings, not reservations**: running a VM and a container together can
+  exceed `local.incus.guest.memoryMiB` by design (on `rpi5-8gb`, 4608 + 3072 MiB against a 6144 MiB
+  budget). Host budgets (`local.incus.guest.memoryMiB`): `rpi5-8gb` 6144 (~2 GB left for host +
+  zram), `rpi5-4gb` 2560.
 
 #### TLS / remote access
 
@@ -215,8 +226,10 @@ so a browser warns and connecting via LAN IP is a name mismatch regardless of tr
   `incus.service` restarts) - no CA, no join token, no OIDC broker. (Considered and rejected - see
   decisions ledger.)
 - Names: `rpi5-8gb.x.esselius.dev` / `rpi5-4gb.x.esselius.dev` (`local.incus.tls.serverName`).
-- `acme.enable` is set per host. A host cannot decrypt the GoDaddy secret - and therefore cannot
-  issue its cert - until its SSH host key is an age recipient (see Playbooks > secrets).
+- `acme.enable` defaults to `true` for both main hosts in `modules/site.nix` (a host can override it).
+  A host cannot decrypt the GoDaddy secret - and therefore cannot issue its cert - until its SSH
+  host key is an age recipient (see Playbooks > secrets); until then, set
+  `local.incus.tls.acme.enable = false` on a new host to avoid a failing sops unit at boot.
 
 #### Secrets (sops)
 
@@ -262,8 +275,10 @@ data path: if Incus or `incusbr-vpn` does not start, the host resolver still ser
 cached internal records.
 
 On `rpi5-8gb`, Unbound is the authoritative secondary for `int.esselius.dev`, transferring the zone
-from the local Incus built-in DNS (`127.0.0.1:1053`) and persisting it in a zonefile. Incus serves
-only AXFR; Unbound is the queryable resolver. On `rpi5-4gb` the zone records live on `rpi5-8gb`, so
+from the local Incus built-in DNS (`127.0.0.1:1053`) and persisting it in a zonefile under
+`/var/lib/unbound` (which is on `/persist`, so the cached zone survives reboots even if Incus is
+down). Incus serves only AXFR; Unbound is the queryable resolver. On `rpi5-4gb` the zone records live
+on `rpi5-8gb`, so
 its Unbound forwards `int.esselius.dev` to `10.6.0.3` over the direct peer instead of transferring a
 copy. Everything outside the zone is recursively resolved. Static `local-data` keeps `cache.int`,
 `monitoring.int`, and the `_mqtt._tcp` SRV record available even when Incus or the zone transfer is
@@ -271,9 +286,11 @@ unavailable. The host's own `systemd-resolved` routes only `~int.esselius.dev` t
 other lookups keep using the normal per-link resolvers. LLMNR and mDNS are disabled for the same
 reason as before: unanswered reverse lookups add ~10 seconds.
 
-`local.dns.listenAddresses` must include the host's `local.wireguard.address`; Unbound is ordered
-after `wireguard-wg0.service` but has no dependency on `incus.service`. WireGuard client configs
-must use that address as their DNS (`rpi5-8gb`: `DNS = 10.6.0.3`; `rpi5-4gb`: `DNS = 10.6.0.5`).
+`local.dns.listenAddresses` defaults to loopback plus the host's `local.wireguard.address` (the
+literal `10.6.0.3`/`10.6.0.5`), so it cannot drift from the tunnel; override it only to add more
+listeners. Unbound is ordered after `wireguard-wg0.service` but has no dependency on
+`incus.service`. WireGuard client configs must use that address as their DNS (`rpi5-8gb`:
+`DNS = 10.6.0.3`; `rpi5-4gb`: `DNS = 10.6.0.5`).
 
 #### Direct peers (bypass the router)
 
@@ -402,17 +419,15 @@ outbound-only - no firewall or DNS changes on the host. A `prometheus.relabel` s
 NixOS `alloy` module runs the service as the `alloy` user in the `systemd-journal` group and reads
 `/etc/alloy/config.alloy`, which this module owns via `environment.etc`.
 
-It also scrapes Incus's per-instance metrics (`services.alloy` job `incus`, `local.monitoringAgent.scrapeIncus`).
-`modules/incus/preseed.nix` exposes Incus's `/1.0/metrics` on a loopback-only listener
-(`local.incus.metrics`, enabled on both Pis; `core.metrics_address = 127.0.0.1:9100`,
-`core.metrics_authentication = false`). That endpoint is HTTPS with Incus's own certificate, so the
-scrape skips TLS verification and never leaves the host - no firewall hole and no metrics client cert.
-Note: the preseed service is `PartOf=incus.service`, so it re-applies on every incus restart and
-reboot - not just at install. A deploy that only changes the preseed file does not restart incus
-(`RestartIfChanged=false`), so to pick it up immediately either restart `incus.service` or set the
-key by hand (`incus config set core.metrics_address=127.0.0.1:9100` +
-`incus config set core.metrics_authentication=false`). Removing a key from the preseed does not
-unset it; use `incus config unset`.
+It also scrapes Incus's per-instance metrics (`services.alloy` job `incus`,
+`local.monitoringAgent.scrapeIncus`; asking for the scrape enables `local.incus.metrics` by default).
+`modules/incus/runtime.nix` exposes Incus's `/1.0/metrics` on a loopback-only listener
+(`core.metrics_address = 127.0.0.1:9100`, `core.metrics_authentication = false`). That endpoint is
+HTTPS with Incus's own certificate, so the scrape skips TLS verification and never leaves the host -
+no firewall hole and no metrics client cert. The listener settings are applied with
+`incus config set` by the `incus-runtime-config` oneshot, which re-runs on every `incus.service`
+start and on each deploy that changes it - no manual incus restart needed. (It only sets keys; to
+remove one, use `incus config unset`.)
 
 Unbound and WireGuard exporters (`modules/dns.nix`, `modules/wireguard.nix`) run loopback-only and
 are scraped by the same agent (`job=unbound`, `job=wireguard`), adding query/cache/rcode and peer
@@ -435,9 +450,9 @@ instance; until then the DNS name will not resolve.
 | Topology | standalone pair, no cluster | 2-member Cowsql/Raft clusters lose quorum on a single node update; container live migration is stop-and-move anyway for real workloads; offline `incus move` covers the need |
 | TLS server cert | Let's Encrypt, DNS-01 via GoDaddy | publicly trusted (no browser warning, no keychain import), no inbound `:80`, no CA to run or rotate; GoDaddy creds held in sops |
 | Internal TLS trust | vendored Esselius root CA (`modules/pki.nix`) | Attic serves a step-ca certificate, so the hosts need the root in their bundle; this is the same public certificate `konfig` trusts, and a root rotation replaces one file |
-| Client auth | incus client cert trusted via preseed | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires |
-| Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall |
-| Guest memory budget | per-host (6 GiB / 2.5 GiB) | leaves headroom for host + zram on the 8/4 GB boards |
+| Client auth | incus client cert trusted by an idempotent `incus-trust-clients` oneshot | avoids running a CA for mTLS and avoids an OIDC broker; `step-ca`/PKI and GitHub-via-Dex were both overkill for two hosts, and kanidm can't do the device grant incus requires. The preseed `certificates` list is create-only and errors on incus restarts, so it is not used |
+| Bridge addressing | explicit per-host subnets | predictable and non-colliding vs `auto`; easy to firewall. The VPN bridge's network address is derived from its `ipv4` CIDR so the masquerade can never disagree with it |
+| Guest memory budget | per-host (6 GiB / 2.5 GiB), used as a basis for **per-instance caps** | leaves headroom for host + zram on the 8/4 GB boards; the `container`/`vm` limits are ceilings, not reservations, so one of each can deliberately exceed the budget |
 | Bootstrap ZFS | disabled (`boot.supportedFilesystems.zfs = false`) | the upstream sd-image base profile enables ZFS, pulling in `zfs-kernel`; that needs the kernel's `dev` output, which is absent from the binary caches, forcing a full `linux-rpi` build per image. The installer only mounts btrfs/ext4/ESP |
 | VPN topology | router = WireGuard server; Pis = split-tunnel nodes (`10.6.0.0/24` only) | full tunnel (`0.0.0.0/0`) would route the host's and instances' traffic through the router and disturb direct LAN/instance paths; split tunnel keeps management/LAN direct while still reaching every VPN client |
 | VPN-reachable instances | separate `incusbr-vpn` bridge per host (`10.43.0.0/24`, `10.43.1.0/24`), `ipv4.nat = false` + uplink-scoped masquerade | incus NAT rewrites instance source IPs on any non-bridge egress (incl. `wg0`) and breaks inbound VPN connections; disabling it and masquerading only to the uplink (`end0`) preserves source IPs while keeping internet egress |
@@ -447,8 +462,9 @@ instance; until then the DNS name will not resolve.
 | Cross-host instance routing | direct-peer `allowedIPs` carry `10.42.0.0/24` <-> `10.42.1.0/24` and `10.43.0.0/24` <-> `10.43.1.0/24` | routes over the LAN direct peer (no router dependency); default-bridge traffic stays NATed, while VPN-bridge traffic keeps real source IPs |
 | Secrets | sops-nix, age to host SSH keys + the Mac's SSH key | matches `konfig`; no long-lived shared age key stored on the Pis |
 | Monitoring agent | Grafana Alloy (`local.monitoringAgent`), node metrics + journal to `monitoring.int.esselius.dev` | self-hosted metrics/logs; reuses the `int.esselius.dev` split DNS so it is outbound-only |
-| Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated) | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs |
+| Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated), applied by `incus-runtime-config` | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs, and a deploy applies it without restarting incus |
 | Metrics exporters | Unbound + WireGuard exporters, loopback-only, scraped by Alloy | query/cache/rcode and handshake/transfer visibility without exposing another listener on the LAN or `wg0` |
+| Shared site config | `modules/site.nix` (`local.site`) + `mkDefault` | the VPN server identity, DNS zone/bootstrap records, UI client cert and monitoring/TLS toggles must agree across the pair; keeping them in one place removes duplicated host config and the risk of the two hosts drifting apart |
 
 ## Playbooks
 
@@ -540,9 +556,9 @@ sops secrets/rpi5.yaml              # godaddy_acme: |
 sops updatekeys secrets/rpi5.yaml   # re-run after adding/removing recipients
 ```
 
-Then set `local.incus.tls.acme.enable = true;` on any host whose key is a recipient, and rebuild.
-The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for clients to reach it;
-DNS-01 validation itself needs no inbound access.
+ACME is already enabled by default (`modules/site.nix`); once the key is a recipient, rebuild and
+the cert is issued. The host also needs a DNS A record (`<host>.x.esselius.dev` -> its IP) for
+clients to reach it; DNS-01 validation itself needs no inbound access.
 
 Client certs are trusted declaratively by the `incus-trust-clients` oneshot (idempotent, since incus
 preseed's `certificates` list is create-only). The repo already enrols the browser-generated UI cert
@@ -591,8 +607,7 @@ correctness.
 
 | Symptom | Fix | NVMe impact |
 |---|---|---|
-| SD card / bootloader broken, NVMe fine | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
-| SD card physically dead or unknown state | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
+| SD card / bootloader broken or physically dead, NVMe fine | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
 | Want a genuinely clean slate | reflash, then **hard reset** above (default `nixos-anywhere`, no `--disko-mode`) | **wiped** (disko's default mode destroys + recreates) |
 
 ### Migration between hosts (offline, no cluster)
@@ -620,10 +635,9 @@ Confirmed working on real hardware (8 GB board):
   vendor kernel host
 - incus server certificate: Let's Encrypt via GoDaddy DNS-01, issued in-process by incusd and served
   on `:8443` (needed `LEGO_DNS_PROPAGATION_DISABLE_RNS` - see TLS section); `acme.domain`/`provider`
-  set through the preseed, creds from the sops `godaddy_acme` EnvironmentFile, `nixos-rebuild
-  switch` from macOS via `--build-host` (host reuses its uncached kernel)
-- preseed client-cert trust: the browser-generated UI cert (`incus-ui-localho.st`) is enrolled via
-  `local.incus.tls.clientCertificates` and accepted by incusd (`incus config trust list`)
+  set through the preseed, creds from the sops `godaddy_acme` EnvironmentFile
+- client-cert trust: the browser-generated UI cert (`incus-ui-localho.st`) is enrolled by
+  `incus-trust-clients` and accepted by incusd (`incus config trust list`)
 - The mount + `nixos-enter` dance (mount NVMe subvolumes + SD partitions,
   `switch-to-configuration boot`) successfully populates the SD boot partition after an install -
   exercised by hand several times, not yet scripted
@@ -639,7 +653,7 @@ Confirmed working on real hardware (8 GB board):
   `nix store ping --store https://cache.int.esselius.dev/homelab` succeeds, and Nix no longer logs
   `unable to get local issuer certificate` or retries the Attic substituter
 - `rpi5-4gb` from scratch: `nixos-anywhere` install, host deploy, and incus-native ACME issuance.
-  After adding its SSH host key to `.sops.yaml` and rekeying, `acme.enable = true` produced a
+  After adding its SSH host key to `.sops.yaml` and rekeying, the default-on ACME config produced a
   Let's Encrypt cert for `rpi5-4gb.x.esselius.dev` and `https://rpi5-4gb.x.esselius.dev:8443/`
   returns 200
 - WireGuard on `rpi5-8gb`: `wg0` handshakes with the router (`latest handshake` in `wg show`),
@@ -672,6 +686,10 @@ Pre-flight tested from macOS (not on the Pi):
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
   reboot). Any new service gets reviewed against `modules/storage.nix`'s persist list.
+- The Incus API/UI listens on all interfaces (`core.https_address = ":8443"`, `local.incus.httpsPort`)
+  and the firewall opens that port globally, so it is reachable from the LAN and the VPN, not just
+  `wg0`. Client auth is certificate-based; narrowing the listener/firewall to `wg0`/LAN would be
+  defense in depth if that exposure ever becomes unwanted.
 - Every host eval prints disko's "The legacy table is outdated..." warning: `disko-sd.nix`
   necessarily uses disko's legacy `table`/`msdos` type for the MBR SD card (disko's new `gpt` type is
   GPT-only and partlabel-addressed, so it can't describe this disk). It is mount-only and harmless
@@ -702,5 +720,5 @@ Pre-flight tested from macOS (not on the Pi):
   includes NVMe, retire the SD from daily duty entirely.
 - Re-evaluate mainline kernel once nixos-hardware/nixpkgs settle the Pi 5 DTB story further
   (tracked via nixos-hardware issue #78).
-- WireGuard on `rpi5-4gb` (same `local.wireguard` options) plus static LAN routes so instances on
-  both hosts reach each other; zigbee passthrough details; secondary hosts at scale - additive.
+- Zigbee passthrough details and secondary hosts at scale - additive; both Pis are already wired up
+  (WireGuard, DNS, cross-host routing).

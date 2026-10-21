@@ -1,3 +1,14 @@
+let
+  # Shared by every subvolume: no access-time updates, transparent zstd
+  # compression, and no online discard (fstrim handles the NVMe instead).
+  mountOptions = [
+    "noatime"
+    "compress=zstd"
+    "nodiscard"
+  ];
+
+  subvolume = mountpoint: { inherit mountpoint mountOptions; };
+in
 {
   disko.devices = {
     disk.main = {
@@ -14,38 +25,10 @@
             type = "btrfs";
             extraArgs = [ "-f" ];
             subvolumes = {
-              "@root" = {
-                mountpoint = "/";
-                mountOptions = [
-                  "noatime"
-                  "compress=zstd"
-                  "nodiscard"
-                ];
-              };
-              "@nix" = {
-                mountpoint = "/nix";
-                mountOptions = [
-                  "noatime"
-                  "compress=zstd"
-                  "nodiscard"
-                ];
-              };
-              "@persist" = {
-                mountpoint = "/persist";
-                mountOptions = [
-                  "noatime"
-                  "compress=zstd"
-                  "nodiscard"
-                ];
-              };
-              "@snapshots" = {
-                mountpoint = "/snapshots";
-                mountOptions = [
-                  "noatime"
-                  "compress=zstd"
-                  "nodiscard"
-                ];
-              };
+              "@root" = subvolume "/";
+              "@nix" = subvolume "/nix";
+              "@persist" = subvolume "/persist";
+              "@snapshots" = subvolume "/snapshots";
             };
           };
         };

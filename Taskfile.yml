@@ -112,7 +112,9 @@ tasks:
   fmt:
     desc: Format Nix files
     cmds:
-      - nix fmt
+      # Pass the file list explicitly: bare `nix fmt` reads stdin on recent Nix
+      # instead of formatting the tree.
+      - git ls-files --cached --others --exclude-standard '*.nix' | xargs nix fmt
 
   secrets:edit:
     desc: Edit secrets/rpi5.yaml (devshell provides the age identity)

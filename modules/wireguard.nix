@@ -100,9 +100,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    sops.secrets.${cfg.privateKeySecret} = {
-      sopsFile = ../secrets/rpi5.yaml;
-    };
+    sops.secrets.${cfg.privateKeySecret} = { };
 
     networking.wireguard.interfaces.wg0 = {
       ips = [ cfg.address ];
@@ -122,15 +120,9 @@ in
           persistentKeepalive = 25;
         }
       ]
-      ++ map (
-        p:
-        {
-          inherit (p) publicKey endpoint allowedIPs;
-        }
-        // lib.optionalAttrs (p.persistentKeepalive != null) {
-          inherit (p) persistentKeepalive;
-        }
-      ) cfg.extraPeers;
+      # The nixpkgs peer submodule already accepts `persistentKeepalive = null`,
+      # so the extra peers need no reshaping.
+      ++ cfg.extraPeers;
     };
 
     # Peer handshake age and per-peer transferred bytes for the WireGuard

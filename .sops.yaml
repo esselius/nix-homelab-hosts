@@ -5,6 +5,7 @@ creation_rules:
           # Each Pi's SSH host key, converted to age (ssh-keyscan <ip> | ssh-to-age):
           - age1d8sutmfp9ew327lp5mnkncqa2y9dan4cfx80dxsdlsd2njzqzaus6wlr3e # 192.168.50.80
           - age1q0kwlktcdcd8xzv7naz0k5t5d7u37pcue0xykr3xnrwq0mj9q9vqkn2clq # 192.168.50.33
-          # Mac's local SSH key; sops picks ~/.ssh/id_ed25519 up automatically
-          # for local edits (no env var / plugin needed).
+          # Mac's local SSH key. sops 3.13.3 does not read ~/.ssh/id_ed25519
+          # directly; the devshell's shellHook sets SOPS_AGE_KEY_CMD to derive
+          # an age identity from it (see flake.nix).
           - age1tc32kf0zh3xtkuu4j6eh9swskyvjlxfxx0q997mgrtl075fn9p8sgy94av # Mac

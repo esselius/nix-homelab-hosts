@@ -57,6 +57,10 @@
     directories = [
       "/var/lib/nixos"
       "/var/lib/incus"
+      # Unbound's AXFR secondary zonefile for int.esselius.dev (see
+      # modules/dns.nix). Persisted so the host can still answer for the zone
+      # when Incus is down after a reboot.
+      "/var/lib/unbound"
       "/var/log"
     ];
     files = [
@@ -66,9 +70,6 @@
       "/etc/ssh/ssh_host_rsa_key"
       "/etc/ssh/ssh_host_rsa_key.pub"
     ];
-    users.admin = {
-      directories = [ ];
-    };
   };
 
   services.fstrim.enable = true;

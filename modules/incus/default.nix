@@ -7,10 +7,11 @@
   # list attributes defined across separate modules.
   imports = [
     ./network.nix
+    ./vpn-bridge.nix
     ./storage.nix
     ./profiles.nix
     ./tls.nix
-    ./dns.nix
+    ./runtime.nix
     ./preseed.nix
   ];
 

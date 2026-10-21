@@ -25,7 +25,12 @@ in
     memoryMiB = lib.mkOption {
       type = lib.types.ints.positive;
       default = 2048;
-      description = "Total RAM budget for guests on this board (host + zram reserve excluded).";
+      description = ''
+        Guest RAM budget for this board (host + zram reserve excluded). The
+        `container` and `vm` profiles derive their *per-instance* caps from it
+        (50% / 75%), so these are ceilings, not reservations: a VM and a
+        container running together can deliberately exceed the budget.
+      '';
     };
     cpuCount = lib.mkOption {
       type = lib.types.ints.positive;

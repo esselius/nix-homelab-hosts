@@ -1,10 +1,9 @@
 { inputs, pkgs, ... }:
 {
   imports = [
+    # baseModules (raspberry-pi, nix-settings, ssh-access) are added by
+    # flake.nix, shared with the permanent hosts.
     "${inputs.nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
-    ../modules/raspberry-pi.nix
-    ../modules/nix-settings.nix
-    ../modules/ssh-access.nix
   ];
 
   system.nixos.variant_id = "installer";

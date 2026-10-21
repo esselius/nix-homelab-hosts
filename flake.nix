@@ -42,17 +42,22 @@
     }@inputs:
     let
       mkHost =
-        name: extraModules:
+        modules:
         nixpkgs.lib.nixosSystem {
           system = "aarch64-linux";
           specialArgs = { inherit inputs; };
-          modules = extraModules;
+          inherit modules;
         };
 
-      mainHostModules = [
+      # Shared by the permanent hosts and the bootstrap installer.
+      baseModules = [
         ./modules/raspberry-pi.nix
         ./modules/nix-settings.nix
         ./modules/ssh-access.nix
+      ];
+
+      mainHostModules = baseModules ++ [
+        ./modules/site.nix
         ./modules/zram.nix
         ./modules/wireguard.nix
         ./modules/dns.nix
@@ -72,9 +77,9 @@
     in
     {
       nixosConfigurations = {
-        "rpi5-8gb" = mkHost "rpi5-8gb" (mainHostModules ++ [ { imports = [ ./hosts/rpi5-8gb.nix ]; } ]);
-        "rpi5-4gb" = mkHost "rpi5-4gb" (mainHostModules ++ [ { imports = [ ./hosts/rpi5-4gb.nix ]; } ]);
-        "rpi5-bootstrap" = mkHost "rpi5-bootstrap" ([ { imports = [ ./hosts/rpi5-bootstrap.nix ]; } ]);
+        rpi5-8gb = mkHost (mainHostModules ++ [ ./hosts/rpi5-8gb.nix ]);
+        rpi5-4gb = mkHost (mainHostModules ++ [ ./hosts/rpi5-4gb.nix ]);
+        rpi5-bootstrap = mkHost (baseModules ++ [ ./hosts/rpi5-bootstrap.nix ]);
       };
 
       images.rpi5-bootstrap = self.nixosConfigurations."rpi5-bootstrap".config.system.build.sdImage;
@@ -118,12 +123,9 @@
           pkgs = nixpkgs.legacyPackages.aarch64-darwin;
           # Eval does not require the target platform, so a Darwin `nix flake
           # check` can still prove the aarch64-linux hosts evaluate.
-          hostDrvs = [
-            self.nixosConfigurations."rpi5-8gb".config.system.build.toplevel
-            self.nixosConfigurations."rpi5-4gb".config.system.build.toplevel
-            self.nixosConfigurations."rpi5-bootstrap".config.system.build.toplevel
-            self.images.rpi5-bootstrap
-          ];
+          hostDrvs =
+            map (c: c.config.system.build.toplevel) (builtins.attrValues self.nixosConfigurations)
+            ++ [ self.images.rpi5-bootstrap ];
         in
         {
           # Force evaluation of every host's toplevel drvPath (eval, not build):
@@ -147,6 +149,20 @@
               ''
                 cd "$src"
                 fd --extension nix --exec nixfmt --check {}
+                touch $out
+              '';
+
+          # The hand-written shell (node_exporter textfile collectors) is the
+          # one layer `nix fmt` does not cover.
+          shellcheck =
+            pkgs.runCommand "shellcheck"
+              {
+                nativeBuildInputs = [ pkgs.shellcheck ];
+                src = self;
+              }
+              ''
+                cd "$src"
+                shellcheck modules/scripts/*.sh
                 touch $out
               '';
         };

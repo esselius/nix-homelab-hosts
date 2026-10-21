@@ -1,5 +1,4 @@
 {
-  lib,
   ...
 }:
 let
@@ -29,7 +28,7 @@ in
     ];
     extra-trusted-public-keys = [
       cachixPublicKey
-    ]
-    ++ lib.optional (atticPublicKey != null) atticPublicKey;
+      atticPublicKey
+    ];
   };
 }

@@ -59,13 +59,17 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Also scrape Incus's `/1.0/metrics` (per-instance CPU/memory/disk/network),
-        requires `local.incus.metrics.enable`.
+        Also scrape Incus's `/1.0/metrics` (per-instance CPU/memory/disk/network).
+        Implies `local.incus.metrics.enable` unless a host sets it explicitly.
       '';
     };
   };
 
   config = lib.mkIf cfg.enable {
+    # Don't silently emit no incus scrape: asking for it enables the loopback
+    # listener that modules/incus/runtime.nix exposes.
+    local.incus.metrics.enable = lib.mkDefault cfg.scrapeIncus;
+
     # The NixOS module runs Alloy as the `alloy` user and adds it to the
     # systemd-journal group, so the journal source below can read logs. It reads
     # /etc/alloy/config.alloy (its configPath default), which we own here.

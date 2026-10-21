@@ -15,10 +15,16 @@ in
 
     listenAddresses = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ "127.0.0.1" ];
+      default = [
+        "127.0.0.1"
+      ]
+      ++ lib.optional config.local.wireguard.enable (
+        lib.head (lib.splitString "/" config.local.wireguard.address)
+      );
       description = ''
-        Addresses Unbound listens on. Include the host's WireGuard address so
-        VPN clients can keep resolving when the Incus bridge is down.
+        Addresses Unbound listens on. Defaults to loopback plus this host's
+        WireGuard address, so VPN clients can keep resolving when the Incus
+        bridge is down.
       '';
     };
 
@@ -103,8 +109,8 @@ in
           extended-statistics = true;
           access-control = [
             "127.0.0.0/8 allow"
-            "10.6.0.0/24 allow"
-          ];
+          ]
+          ++ lib.optional config.local.wireguard.enable "${config.local.wireguard.vpnSubnet} allow";
           # The private zone is intentionally unsigned/insecure.
           domain-insecure = zone;
           local-zone = map (name: "${name}.${zone} static") (bootstrapNames ++ srvNames);
@@ -159,10 +165,11 @@ in
     };
 
     # Bind the WireGuard address only after wg0 exists. Start after Incus has
-    # been told to serve the zone, but do not require it: a persisted zonefile
-    # must still load if Incus is down.
+    # been told to serve the zone, but do not require it: the zonefile lives
+    # under /var/lib/unbound, which is persisted (modules/storage.nix), so a
+    # cached copy still loads if Incus is down.
     systemd.services.unbound.after =
-      lib.optional (config.local.incus.dnsAddress != null) "incus-dns.service"
+      lib.optional (config.local.incus.dnsAddress != null) "incus-runtime-config.service"
       ++ lib.optional config.local.wireguard.enable "wireguard-wg0.service";
     systemd.services.unbound.wants = lib.optional config.local.wireguard.enable "wireguard-wg0.service";
   };

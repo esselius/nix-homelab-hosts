@@ -45,8 +45,10 @@ in
       default = { };
       description = ''
         incus clients (e.g. this Mac) to trust, as name -> PEM path. Public
-        material, safe to commit. Trusted declaratively via the preseed
-        `certificates` list, so no mTLS CA and no join token is needed.
+        material, safe to commit. Trusted idempotently by the
+        `incus-trust-clients` oneshot below, so no mTLS CA and no join token
+        is needed. (The preseed `certificates` list is create-only and errors
+        on the re-runs triggered by every incus restart, so it is not used.)
       '';
     };
   };
@@ -63,9 +65,7 @@ in
       "acme.agree_tos" = "true";
     };
 
-    sops.secrets.${cfg.acme.sopsSecret} = lib.mkIf cfg.acme.enable {
-      sopsFile = ../../secrets/rpi5.yaml;
-    };
+    sops.secrets.${cfg.acme.sopsSecret} = lib.mkIf cfg.acme.enable { };
 
     # lego reads the GoDaddy creds from the daemon's environment.
     systemd.services.incus.serviceConfig.EnvironmentFile =

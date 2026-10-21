@@ -1,30 +1,21 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 let
+  helpers = import ./lib.nix { inherit lib; };
   script = pkgs.writeShellScript "nvme-wear" (builtins.readFile ./scripts/nvme-wear.sh);
 in
 {
-  systemd.tmpfiles.rules = [
-    "d /run/node_exporter/textfile 0755 root root -"
+  imports = [
+    (helpers.mkTextfileCollector {
+      name = "nvme-wear";
+      description = "Publish NVMe SMART wear metrics for node_exporter";
+      inherit script;
+      onBootSec = "2min";
+      interval = "1h";
+      path = [
+        pkgs.coreutils
+        pkgs.jq
+        pkgs.smartmontools
+      ];
+    })
   ];
-
-  systemd.services.nvme-wear = {
-    description = "Publish NVMe SMART wear metrics for node_exporter";
-    path = [
-      pkgs.coreutils
-      pkgs.jq
-      pkgs.smartmontools
-    ];
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = script;
-    };
-  };
-
-  systemd.timers.nvme-wear = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "2min";
-      OnUnitActiveSec = "1h";
-    };
-  };
 }
