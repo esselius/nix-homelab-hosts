@@ -59,11 +59,13 @@ else
   bad "/boot/extlinux/extlinux.conf is missing"
 fi
 
-if run 'systemctl is-active --quiet incus.service'; then
-  ok "incus active"
-else
-  bad "incus.service is not active"
-fi
+for unit in incus.service wireguard-wg0.service unbound.service; do
+  if run "systemctl is-active --quiet $unit"; then
+    ok "$unit active"
+  else
+    bad "$unit is not active"
+  fi
+done
 
 if run 'incus network show incusbr0 >/dev/null 2>&1'; then
   ok "incusbr0 present"
