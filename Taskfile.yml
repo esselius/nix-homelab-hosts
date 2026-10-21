@@ -1,11 +1,13 @@
 version: '3'
 
-# Deploy/ops entry points, mirroring the README "Playbooks". Override the vars
-# per invocation, e.g. `task deploy HOST=rpi5-4gb IP=192.168.50.33`.
+# Deploy/ops entry points, mirroring the README "Playbooks".
+# HOST is the source of truth; IP is resolved from inventory.nix. Setting IP is
+# only an override for a temporary/bootstrap address and must match inventory
+# unless ALLOW_IP_OVERRIDE=1.
 vars:
   FLAKE: '.'
   HOST: 'rpi5-8gb'
-  IP: '192.168.50.80'
+  IP: ''
   ADMIN: 'admin'
   BOOTSTRAP_IMAGE: 'pi5-bootstrap.img'
 
@@ -17,10 +19,20 @@ tasks:
       - task --list
 
   deploy:
-    desc: 'Update the running host (pulls from the cache when reachable, else builds on-target)'
+    desc: 'Update the running host and verify it (ALLOW_DIRTY=1 to deploy WIP; AUTO_ROLLBACK=1 to revert on a failed verify)'
     cmds:
       - |
         set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+
+        if [ -n "$(git status --porcelain)" ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
+          echo "error: worktree is dirty; commit first or set ALLOW_DIRTY=1" >&2
+          exit 1
+        fi
+        if [ "${SKIP_CHECK:-0}" != 1 ]; then
+          nix flake check
+        fi
+
         # The host is bootstrap-critical: its deploy must never depend on the
         # Attic cache, which runs as a guest *on* this cluster. The substituters
         # are layered (see modules/nix-cache.nix):
@@ -33,15 +45,46 @@ tasks:
         if curl -fsS --max-time 5 https://esselius.cachix.org/nix-cache-info >/dev/null 2>&1; then
           echo "cache reachable - building on the Mac; the host substitutes"
           nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
-            --target-host {{.ADMIN}}@{{.IP}} --use-substitutes --sudo
+            --target-host "{{.ADMIN}}@$ip" --use-substitutes --sudo --diff
         else
           echo "cache unreachable - falling back to an on-target build"
           nixos-rebuild switch --flake {{.FLAKE}}#{{.HOST}} \
-            --target-host {{.ADMIN}}@{{.IP}} --build-host {{.ADMIN}}@{{.IP}} --sudo
+            --target-host "{{.ADMIN}}@$ip" --build-host "{{.ADMIN}}@$ip" --sudo --diff
         fi
+
+        if ! scripts/verify-host.sh "{{.HOST}}" "$ip" "{{.ADMIN}}"; then
+          echo "deploy verification failed for {{.HOST}}" >&2
+          if [ "${AUTO_ROLLBACK:-0}" = 1 ]; then
+            echo "rolling back to the previous generation" >&2
+            nixos-rebuild switch --rollback --target-host "{{.ADMIN}}@$ip" --sudo
+          else
+            echo "run 'task rollback HOST={{.HOST}}' to revert" >&2
+          fi
+          exit 1
+        fi
+
+  verify:
+    desc: 'Post-deploy smoke test for HOST (systemd, boot, incus, cache)'
+    cmds:
+      - |
+        set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+        scripts/verify-host.sh "{{.HOST}}" "$ip" "{{.ADMIN}}"
+
+  rollback:
+    desc: 'Roll HOST back to its previous NixOS generation and verify it'
+    cmds:
+      - |
+        set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+        nixos-rebuild switch --rollback --target-host "{{.ADMIN}}@$ip" --sudo
+        scripts/verify-host.sh "{{.HOST}}" "$ip" "{{.ADMIN}}"
 
   cache-push:
     desc: 'Push the host system closure to the caches (Cachix, then Attic if reachable)'
+    preconditions:
+      - sh: scripts/host-ip.sh {{.HOST}} >/dev/null
+        msg: 'unknown HOST {{.HOST}} (see inventory.nix)'
     cmds:
       - |
         set -e
@@ -59,16 +102,40 @@ tasks:
         fi
 
   install:
-    desc: 'HARD reset: nixos-anywhere full install (WIPES the NVMe)'
+    desc: 'HARD reset: nixos-anywhere full install (WIPES the NVMe; requires CONFIRM=WIPE)'
     cmds:
-      - nix run github:nix-community/nixos-anywhere -- --flake {{.FLAKE}}#{{.HOST}} root@{{.IP}}
+      - |
+        set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+        if [ "${CONFIRM:-}" != WIPE ]; then
+          echo "refusing to wipe {{.HOST}} without CONFIRM=WIPE" >&2
+          exit 1
+        fi
+        if [ -n "$(git status --porcelain)" ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
+          echo "error: worktree is dirty; commit first or set ALLOW_DIRTY=1" >&2
+          exit 1
+        fi
+        nix flake check
+        nix run github:nix-community/nixos-anywhere -- \
+          --flake {{.FLAKE}}#{{.HOST}} "root@$ip"
 
   install:mount:
-    desc: 'SOFT reset: nixos-anywhere --disko-mode mount (NVMe content preserved)'
+    desc: 'SOFT reset: nixos-anywhere --disko-mode mount (NVMe preserved; requires CONFIRM=MOUNT)'
     cmds:
-      - >-
-        nix run github:nix-community/nixos-anywhere --
-        --flake {{.FLAKE}}#{{.HOST}} --disko-mode mount root@{{.IP}}
+      - |
+        set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+        if [ "${CONFIRM:-}" != MOUNT ]; then
+          echo "refusing to install over {{.HOST}} without CONFIRM=MOUNT" >&2
+          exit 1
+        fi
+        if [ -n "$(git status --porcelain)" ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
+          echo "error: worktree is dirty; commit first or set ALLOW_DIRTY=1" >&2
+          exit 1
+        fi
+        nix flake check
+        nix run github:nix-community/nixos-anywhere -- \
+          --flake {{.FLAKE}}#{{.HOST}} --disko-mode mount "root@$ip"
 
   bootstrap:
     desc: Build the bootstrap SD image and decompress it to {{.BOOTSTRAP_IMAGE}}
@@ -77,25 +144,49 @@ tasks:
       - zstd -d -f ./result/sd-image/*.img.zst -o {{.BOOTSTRAP_IMAGE}}
 
   flash:
-    desc: 'Write {{.BOOTSTRAP_IMAGE}} to a raw disk, e.g. task flash DISK=/dev/rdisk4'
+    desc: 'Write {{.BOOTSTRAP_IMAGE}} to a raw disk, e.g. CONFIRM=FLASH task flash DISK=/dev/rdisk4'
     requires:
       vars: [DISK]
     preconditions:
       - sh: test -f {{.BOOTSTRAP_IMAGE}}
         msg: '{{.BOOTSTRAP_IMAGE}} not found - run `task bootstrap` first'
     cmds:
-      - diskutil unmountDisk {{.DISK}}
-      - sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4M status=progress conv=fsync
+      - |
+        set -e
+        if [ "${CONFIRM:-}" != FLASH ]; then
+          echo "refusing to overwrite {{.DISK}} without CONFIRM=FLASH" >&2
+          exit 1
+        fi
+        case "{{.DISK}}" in
+          /dev/rdisk*) ;;
+          *) echo "error: DISK must be a raw disk like /dev/rdisk4" >&2; exit 1 ;;
+        esac
+        if [ "{{.DISK}}" = /dev/rdisk0 ]; then
+          echo "error: refusing /dev/rdisk0 (the system disk)" >&2
+          exit 1
+        fi
+        diskutil unmountDisk {{.DISK}}
+        if dd --version >/dev/null 2>&1; then
+          sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4M status=progress conv=fsync
+        else
+          sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4m conv=fsync
+        fi
 
   ssh:
     desc: SSH into the running host
     cmds:
-      - ssh {{.ADMIN}}@{{.IP}}
+      - |
+        set -e
+        ip="$(scripts/host-ip.sh "{{.HOST}}" "{{.IP}}")"
+        ssh "{{.ADMIN}}@$ip"
 
   eval:
     desc: 'Evaluate a config path, e.g. task eval PATH=networking.hostName'
     requires:
       vars: [PATH]
+    preconditions:
+      - sh: scripts/host-ip.sh {{.HOST}} >/dev/null
+        msg: 'unknown HOST {{.HOST}} (see inventory.nix)'
     cmds:
       - nix eval --json '{{.FLAKE}}#nixosConfigurations.{{.HOST}}.config.{{.PATH}}'
 
@@ -112,9 +203,7 @@ tasks:
   fmt:
     desc: Format Nix files
     cmds:
-      # Pass the file list explicitly: bare `nix fmt` reads stdin on recent Nix
-      # instead of formatting the tree.
-      - git ls-files --cached --others --exclude-standard '*.nix' | xargs nix fmt
+      - nix fmt
 
   secrets:edit:
     desc: Edit secrets/rpi5.yaml (devshell provides the age identity)
