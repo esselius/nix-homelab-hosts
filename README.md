@@ -465,6 +465,7 @@ instance; until then the DNS name will not resolve.
 | Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated), applied by `incus-runtime-config` | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs, and a deploy applies it without restarting incus |
 | Metrics exporters | Unbound + WireGuard exporters, loopback-only, scraped by Alloy | query/cache/rcode and handshake/transfer visibility without exposing another listener on the LAN or `wg0` |
 | Shared site config | `modules/site.nix` (`local.site`) + `mkDefault` | the VPN server identity, DNS zone/bootstrap records, UI client cert and monitoring/TLS toggles must agree across the pair; keeping them in one place removes duplicated host config and the risk of the two hosts drifting apart |
+| Issue tracking | `bd` (beads) in the dev shell; `.beads/` committed, Dolt history on `refs/dolt/data` | git-native, dependency-aware tracker that an agent can drive offline from the CLI; no external service for a two-host repo |
 
 ## Playbooks
 
@@ -642,6 +643,28 @@ incus config device add <instance> zigbee unix-char path=/dev/serial/by-id/<id>
 
 USB passthrough devices never migrate with an instance; re-attach at the destination.
 
+## Issue tracking (beads)
+
+Issues live in `.beads/` and are driven by [`bd`](https://github.com/steveyegge/beads)
+from the dev shell. The Dolt database is local; `.beads/config.yaml` (including
+the `sync.remote` wired to this repo's `origin`), `metadata.json`, and hooks are
+tracked. Use it instead of markdown TODOs:
+
+```bash
+bd ready                  # unblocked work
+bd create "Title" -p 2    # new issue (P0 critical .. P4 backlog)
+bd show <id>              # details and dependencies
+bd update <id> --claim    # take it
+bd close <id>             # done
+bd prime                  # full workflow context for agents
+```
+
+Dolt history syncs through `refs/dolt/data` on the git remote, separate from
+`refs/heads/main`: use `bd sync` (pull + push) or `bd dolt push` / `bd dolt
+pull`. A fresh clone runs `bd bootstrap` to fetch it. `.beads/issues.jsonl` is
+an optional export for viewers (`bd export`), not the sync channel. Only the
+Mac needs `bd` from the dev shell, not the hosts.
+
 ## Verification status
 
 Confirmed working on real hardware (8 GB board):
@@ -738,11 +761,12 @@ Pre-flight tested from macOS (not on the Pi):
   step-ca root without updating that file breaks Attic substitution - deploys still work via Cachix
   or an on-target build, but every Nix invocation on the host logs TLS warnings.
 
-## Future paths (documented, not built)
+Actionable follow-ups from these risks (sops recipient check, vendor-kernel caching, Incus
+exposure, root-CA rotation) are tracked in beads: `bd list --label readme-scan` from the dev shell.
 
-- NVMe-only boot once nixpkgs ships U-Boot 2026.10: add NVMe FAT to disko, EEPROM `BOOT_ORDER`
-  includes NVMe, retire the SD from daily duty entirely.
-- Re-evaluate mainline kernel once nixos-hardware/nixpkgs settle the Pi 5 DTB story further
-  (tracked via nixos-hardware issue #78).
-- Zigbee passthrough details and secondary hosts at scale - additive; both Pis are already wired up
-  (WireGuard, DNS, cross-host routing).
+## Future paths (tracked in beads)
+
+The longer-horizon work - NVMe-only boot, mainline-kernel re-evaluation, IPv6 on `incusbr-vpn`,
+Zigbee passthrough, and multi-host scaling - is tracked in beads instead of duplicated here. Run
+`bd list --label readme-scan` (or `bd ready`) from the dev shell; each issue carries its README
+source and acceptance criteria.

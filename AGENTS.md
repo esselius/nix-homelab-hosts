@@ -17,6 +17,12 @@ workloads live here - those run as incus instances.
   everything else belongs in `modules/`.
 - This repo documents *why*, not just what: keep the README's decisions ledger,
   "Known risks", and verification status in sync with config changes.
+- Issue tracking uses `bd` (beads), initialized under `.beads/` and available in
+  the dev shell. Use `bd ready`, `bd create`, `bd show <id>`, `bd update <id>
+  --claim`, and `bd close <id>` instead of markdown TODO lists; run `bd prime`
+  for the full workflow. `.beads/` config and hooks are tracked; the Dolt
+  database and runtime files are ignored, and Dolt history syncs through
+  `bd dolt push` / `bd dolt pull` (fresh clones: `bd bootstrap`).
 - Run `task fmt` and `nix flake check` before committing. `nix fmt` (and
   `task fmt`) formats the tree via the flake formatter; `nix flake check` covers
   `checks.eval-all`, `checks.fmt`, and `checks.shellcheck`.

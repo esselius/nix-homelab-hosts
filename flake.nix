@@ -109,6 +109,8 @@
             pkgs.cachix
             pkgs.attic-client
             pkgs.opencode
+            # Issue tracking lives in .beads/ (see README "Issue tracking").
+            pkgs.beads
           ];
 
           # sops 3.13.3 does not read ~/.ssh/id_ed25519 directly (its SSH
