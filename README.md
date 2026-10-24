@@ -465,7 +465,7 @@ instance; until then the DNS name will not resolve.
 | Incus metrics | Alloy scrapes Incus `/1.0/metrics` (`local.incus.metrics`, loopback-only, unauthenticated), applied by `incus-runtime-config` | per-instance CPU/mem/disk/network with no firewall hole or metrics client cert; the listener is only exposed where a collector runs, and a deploy applies it without restarting incus |
 | Metrics exporters | Unbound + WireGuard exporters, loopback-only, scraped by Alloy | query/cache/rcode and handshake/transfer visibility without exposing another listener on the LAN or `wg0` |
 | Shared site config | `modules/site.nix` (`local.site`) + `mkDefault` | the VPN server identity, DNS zone/bootstrap records, UI client cert and monitoring/TLS toggles must agree across the pair; keeping them in one place removes duplicated host config and the risk of the two hosts drifting apart |
-| Issue tracking | `bd` (beads) in the dev shell; `.beads/` committed, Dolt history on `refs/dolt/data` | git-native, dependency-aware tracker that an agent can drive offline from the CLI; no external service for a two-host repo |
+| Issue tracking | `bd` (beads) in the dev shell; `.beads/` committed with a tracked JSONL snapshot | git-native, dependency-aware tracker that an agent can drive offline from the CLI; JSONL is the sync path because embedded Dolt push hangs against GitHub |
 
 ## Playbooks
 
@@ -646,9 +646,9 @@ USB passthrough devices never migrate with an instance; re-attach at the destina
 ## Issue tracking (beads)
 
 Issues live in `.beads/` and are driven by [`bd`](https://github.com/steveyegge/beads)
-from the dev shell. The Dolt database is local; `.beads/config.yaml` (including
-the `sync.remote` wired to this repo's `origin`), `metadata.json`, and hooks are
-tracked. Use it instead of markdown TODOs:
+from the dev shell. `.beads/config.yaml`, `metadata.json`, hooks, and the tracked
+JSONL snapshot `.beads/issues.jsonl` are committed; the local Dolt database is
+ignored. Use it instead of markdown TODOs:
 
 ```bash
 bd ready                  # unblocked work
@@ -659,11 +659,12 @@ bd close <id>             # done
 bd prime                  # full workflow context for agents
 ```
 
-Dolt history syncs through `refs/dolt/data` on the git remote, separate from
-`refs/heads/main`: use `bd sync` (pull + push) or `bd dolt push` / `bd dolt
-pull`. A fresh clone runs `bd bootstrap` to fetch it. `.beads/issues.jsonl` is
-an optional export for viewers (`bd export`), not the sync channel. Only the
-Mac needs `bd` from the dev shell, not the hosts.
+`bd` auto-exports after writes (`export.auto`), so commit `.beads/issues.jsonl`
+with the code. A fresh clone loads it with `bd init --from-jsonl` (or
+`bd import .beads/issues.jsonl`). Do not use `bd dolt push` for now: the
+embedded Dolt push hangs against GitHub over both SSH and HTTPS (plain git
+pushes fine); the tracker uses the JSONL snapshot instead. Only the Mac needs
+`bd` from the dev shell, not the hosts.
 
 ## Verification status
 

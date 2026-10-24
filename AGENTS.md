@@ -20,9 +20,10 @@ workloads live here - those run as incus instances.
 - Issue tracking uses `bd` (beads), initialized under `.beads/` and available in
   the dev shell. Use `bd ready`, `bd create`, `bd show <id>`, `bd update <id>
   --claim`, and `bd close <id>` instead of markdown TODO lists; run `bd prime`
-  for the full workflow. `.beads/` config and hooks are tracked; the Dolt
-  database and runtime files are ignored, and Dolt history syncs through
-  `bd dolt push` / `bd dolt pull` (fresh clones: `bd bootstrap`).
+  for the full workflow. `.beads/` config, hooks, and the auto-exported
+  `issues.jsonl` snapshot are tracked (commit it with code); the local Dolt
+  database is ignored and a fresh clone runs `bd init --from-jsonl`. Do not run
+  `bd dolt push` - embedded Dolt hangs against GitHub.
 - Run `task fmt` and `nix flake check` before committing. `nix fmt` (and
   `task fmt`) formats the tree via the flake formatter; `nix flake check` covers
   `checks.eval-all`, `checks.fmt`, and `checks.shellcheck`.
