@@ -643,7 +643,7 @@ generation at the U-Boot prompt (extlinux menu, SD p2). Root state is irrelevant
 | Symptom | Fix | NVMe impact |
 |---|---|---|
 | SD card / bootloader broken or physically dead, NVMe fine | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
-| Want a genuinely clean slate | reflash, then **hard reset** above (default `nixos-anywhere`, no `--disko-mode`) | **wiped** (disko's default mode destroys + recreates) |
+| Want a genuinely clean slate | reflash, then **hard reset** above (`pi5-image install --mode wipe`) | **wiped** (disko's create mode destroys + recreates) |
 
 ### Migration between hosts (offline, no cluster)
 
