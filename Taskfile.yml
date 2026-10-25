@@ -115,8 +115,8 @@ tasks:
           exit 1
         fi
         nix flake check
-        nix run {{.FLAKE}}#nixos-anywhere -- \
-          --flake {{.FLAKE}}#{{.HOST}} "root@$ip"
+        nix run {{.FLAKE}}#pi5-image -- install \
+          --flake {{.FLAKE}} --host {{.HOST}} --mode wipe --yes "root@$ip"
 
   install:mount:
     desc: 'SOFT reset: nixos-anywhere --disko-mode mount (NVMe preserved; requires CONFIRM=MOUNT)'
@@ -133,14 +133,13 @@ tasks:
           exit 1
         fi
         nix flake check
-        nix run {{.FLAKE}}#nixos-anywhere -- \
-          --flake {{.FLAKE}}#{{.HOST}} --disko-mode mount "root@$ip"
+        nix run {{.FLAKE}}#pi5-image -- install \
+          --flake {{.FLAKE}} --host {{.HOST}} --mode mount --yes "root@$ip"
 
   bootstrap:
     desc: Build the bootstrap SD image and decompress it to {{.BOOTSTRAP_IMAGE}}
     cmds:
-      - nix build {{.FLAKE}}#images.rpi5-bootstrap
-      - zstd -d -f ./result/sd-image/*.img.zst -o {{.BOOTSTRAP_IMAGE}}
+      - nix run {{.FLAKE}}#pi5-image -- build --flake {{.FLAKE}} --installer rpi5-bootstrap --output {{.BOOTSTRAP_IMAGE}} --force
 
   flash:
     desc: 'Write {{.BOOTSTRAP_IMAGE}} to a raw disk, e.g. CONFIRM=FLASH task flash DISK=/dev/rdisk4'
@@ -156,20 +155,7 @@ tasks:
           echo "refusing to overwrite {{.DISK}} without CONFIRM=FLASH" >&2
           exit 1
         fi
-        case "{{.DISK}}" in
-          /dev/rdisk*) ;;
-          *) echo "error: DISK must be a raw disk like /dev/rdisk4" >&2; exit 1 ;;
-        esac
-        if [ "{{.DISK}}" = /dev/rdisk0 ]; then
-          echo "error: refusing /dev/rdisk0 (the system disk)" >&2
-          exit 1
-        fi
-        diskutil unmountDisk {{.DISK}}
-        if dd --version >/dev/null 2>&1; then
-          sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4M status=progress conv=fsync
-        else
-          sudo dd if={{.BOOTSTRAP_IMAGE}} of={{.DISK}} bs=4m conv=fsync
-        fi
+        nix run {{.FLAKE}}#pi5-image -- flash {{.BOOTSTRAP_IMAGE}} {{.DISK}} --yes
 
   ssh:
     desc: SSH into the running host

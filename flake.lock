@@ -3,6 +3,7 @@
     "disko": {
       "inputs": {
         "nixpkgs": [
+          "pi5",
           "nixpkgs"
         ]
       },
@@ -23,6 +24,7 @@
     "home-manager": {
       "inputs": {
         "nixpkgs": [
+          "pi5",
           "impermanence",
           "nixpkgs"
         ]
@@ -44,7 +46,10 @@
     "impermanence": {
       "inputs": {
         "home-manager": "home-manager",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": [
+          "pi5",
+          "nixpkgs"
+        ]
       },
       "locked": {
         "lastModified": 1769548169,
@@ -63,6 +68,7 @@
     "nixos-hardware": {
       "inputs": {
         "nixpkgs": [
+          "pi5",
           "nixpkgs"
         ]
       },
@@ -82,22 +88,6 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1768564909,
-        "narHash": "sha256-Kell/SpJYVkHWMvnhqJz/8DqQg2b6PguxVWOuadbHCc=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "e4bae1bd10c9c57b2cf517953ab70060a828ee6f",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nixos",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_2": {
-      "locked": {
         "lastModified": 1791456040,
         "narHash": "sha256-H83yz/do+hjOO0uujHyH8RgtIQP2v7Mw+cLwcZK/xKc=",
         "owner": "NixOS",
@@ -112,12 +102,29 @@
         "type": "github"
       }
     },
-    "root": {
+    "pi5": {
       "inputs": {
         "disko": "disko",
         "impermanence": "impermanence",
         "nixos-hardware": "nixos-hardware",
-        "nixpkgs": "nixpkgs_2",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "narHash": "sha256-Jfg35ipRgcKBZ4m34+Rdb7XzrU0BE4qc6/Svk+PyWDQ=",
+        "path": "/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5",
+        "type": "path"
+      },
+      "original": {
+        "path": "/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5",
+        "type": "path"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "pi5": "pi5",
         "sops-nix": "sops-nix"
       }
     },

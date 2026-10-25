@@ -11,22 +11,16 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    nixos-hardware = {
-      url = "github:NixOS/nixos-hardware";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    disko = {
-      url = "github:nix-community/disko";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
-    impermanence = {
-      url = "github:nix-community/impermanence";
-    };
-
     sops-nix = {
       url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Raspberry Pi 5 hardware, NVMe disk layout, SD boot, impermanence, and
+    # the bootstrap installer live in this reusable flake.
+    # TODO: switch to github:esselius/nixos-raspberry-pi-5 once published.
+    pi5 = {
+      url = "path:/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -35,9 +29,7 @@
     {
       self,
       nixpkgs,
-      nixos-hardware,
-      disko,
-      impermanence,
+      pi5,
       ...
     }@inputs:
     let
@@ -49,14 +41,10 @@
           inherit modules;
         };
 
-      # Shared by the permanent hosts and the bootstrap installer.
-      baseModules = [
-        ./modules/raspberry-pi.nix
+      mainHostModules = [
+        pi5.nixosModules.default
         ./modules/nix-settings.nix
         ./modules/ssh-access.nix
-      ];
-
-      mainHostModules = baseModules ++ [
         ./modules/site.nix
         ./modules/zram.nix
         ./modules/wireguard.nix
@@ -68,25 +56,43 @@
         ./modules/nvme-wear.nix
         ./modules/nix-cache.nix
         ./modules/pki.nix
+        # Project-specific persistence additions only; the Pi 5 boot/storage
+        # layer (root reset, fstrim, scrub, snapper) comes from pi5.
         ./modules/storage.nix
-        ./disko-nvme.nix
-        ./disko-sd.nix
-        disko.nixosModules.disko
-        impermanence.nixosModules.impermanence
       ];
     in
     {
       nixosConfigurations = {
         rpi5-8gb = mkHost (mainHostModules ++ [ ./hosts/rpi5-8gb.nix ]);
         rpi5-4gb = mkHost (mainHostModules ++ [ ./hosts/rpi5-4gb.nix ]);
-        rpi5-bootstrap = mkHost (baseModules ++ [ ./hosts/rpi5-bootstrap.nix ]);
+
+        rpi5-bootstrap = pi5.lib.mkPi5Installer {
+          hostName = "rpi5-bootstrap";
+          # ssh-access.nix supplies the root/admin keys from site.sshPublicKey.
+          extraModules = [
+            ./modules/nix-settings.nix
+            ./modules/ssh-access.nix
+            {
+              system.stateVersion = "26.05";
+              site.permitRootLogin = "prohibit-password";
+            }
+          ];
+        };
       };
 
       images.rpi5-bootstrap = self.nixosConfigurations."rpi5-bootstrap".config.system.build.sdImage;
 
-      # Pin the installer to this flake's nixpkgs instead of `nix run github:...`
-      # (which fetches whatever main happens to be).
-      packages.aarch64-darwin.nixos-anywhere = nixpkgs.legacyPackages.aarch64-darwin.nixos-anywhere;
+      # Re-export the installed CLI and pinned nixos-anywhere so
+      # `nix run .#pi5-image` works from this repository.
+      packages.aarch64-darwin = {
+        pi5-image = pi5.packages.aarch64-darwin.pi5-image;
+        nixos-anywhere = pi5.packages.aarch64-darwin.nixos-anywhere;
+      };
+
+      packages.aarch64-linux = {
+        pi5-image = pi5.packages.aarch64-linux.pi5-image;
+        nixos-anywhere = pi5.packages.aarch64-linux.nixos-anywhere;
+      };
 
       devShells.aarch64-darwin.default =
         let
