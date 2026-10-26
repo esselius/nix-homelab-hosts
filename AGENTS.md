@@ -4,6 +4,13 @@ Scope: the NixOS host layer for a small incus VM-host pair (`rpi5-8gb`,
 `rpi5-4gb`) plus a throwaway `rpi5-bootstrap` installer image. No application
 workloads live here - those run as incus instances.
 
+The Pi 5 hardware support, NVMe disko layout, SD boot description,
+impermanence/root-wipe, installer image, and imaging CLI live in the `pi5`
+flake input (`nixos-raspberry-pi-5`). This repo should consume
+`pi5.nixosModules.default` and `pi5.lib.mkPi5Installer` rather than
+reintroducing local copies of those modules. The input's README documents the
+module options and `pi5-image` CLI.
+
 - Prefer small, explicit modules over framework abstractions. `modules/incus/`
   is split by concern; each file contributes to the internal `local.incus.spec`
   and `preseed.nix` is the only place that assembles the preseed value.
@@ -15,6 +22,12 @@ workloads live here - those run as incus instances.
 - Hosts (`hosts/*.nix`) tune only `local.incus.{network,guest,tls,dnsAddress,metrics}`,
   `local.wireguard`, `local.dns`, plus `networking.hostName` / `stateVersion`;
   everything else belongs in `modules/`.
+- `modules/storage.nix` adds project-specific persistence via
+  `pi5.impermanence.extraDirectories` (`/var/lib/incus`, `/var/lib/unbound`) and
+  opts the reference hosts into snapshots. Generic persistence, fstrim, scrub,
+  the snapper configuration, and the root reset come from the `pi5` input.
+- Bump the `pi5` flake input deliberately (`nix flake update pi5`); a
+  `nixos-hardware` bump there can trigger a long local vendor-kernel build.
 - This repo documents *why*, not just what: keep the README's decisions ledger,
   "Known risks", and verification status in sync with config changes.
 - Issue tracking uses `bd` (beads), initialized under `.beads/` and available in
@@ -42,7 +55,9 @@ workloads live here - those run as incus instances.
   IP default. `task deploy` refuses a dirty worktree (`ALLOW_DIRTY=1` overrides),
   runs `nix flake check`, and then `scripts/verify-host.sh`; a failed verify
   fails the deploy (`AUTO_ROLLBACK=1` reverts, or use `task rollback`).
-  Destructive tasks require `CONFIRM=WIPE|MOUNT|FLASH`.
+  Destructive tasks require `CONFIRM=WIPE|MOUNT|FLASH`. The
+  `bootstrap`/`flash`/`install`/`install:mount` tasks wrap `nix run
+  .#pi5-image`; keep the task-level CONFIRM gates when changing them.
 - CI (`.github/workflows/ci.yml`) runs `nix flake check` on `macos-14` and a
   native `ubuntu-24.04-arm` runner; the latter exercises
   `checks.aarch64-linux`. Keep both platform check sets in sync via `mkChecks`.

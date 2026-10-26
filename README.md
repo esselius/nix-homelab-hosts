@@ -4,13 +4,20 @@ Two standalone NixOS incus servers on Raspberry Pi 5 boards (8 GB and 4 GB), dec
 repo, built from a macOS (Apple Silicon) host, installed via nixos-anywhere without kexec, root on
 NVMe, ephemeral root state (impermanence), microSD carrying the bootloader.
 
+> **Where the Pi 5 layer lives:** hardware support, the NVMe disko layout, the SD boot
+> description, impermanence/root-wipe, the bootstrap installer, and the imaging CLI are
+> now in the `pi5` flake input (`nixos-raspberry-pi-5`). This repository consumes those
+> modules and keeps the incus/VPN/DNS/sops/monitoring/fleet layer. See that repository's
+> README for module options, `pi5-image build|flash|install|provision`, and the full
+> bring-up details.
+
 ## Hosts
 
 | Host | Board | Role | incus workloads |
 |------|-------|------|-----------------|
 | `rpi5-8gb` | Pi 5 8 GB | primary | VMs (KVM/QEMU) + LXC containers |
 | `rpi5-4gb` | Pi 5 4 GB | secondary | LXC containers only |
-| `rpi5-bootstrap` | either | short-lived installer image, stock nixpkgs sd-image-aarch64.nix | none |
+| `rpi5-bootstrap` | either | short-lived installer image from `inputs.pi5.lib.mkPi5Installer` | none |
 
 `rpi5-bootstrap` is not a permanent resident. It is flashed, used once to run `nixos-anywhere`
 against the target disk, and then forgotten; if the SD card or its bootloader generation ever
@@ -32,14 +39,15 @@ Pi 5 EEPROM (SPI) -> stock firmware (SD p1 FAT) -> u-boot.bin -> extlinux.conf (
 ```
 
 - No U-Boot fork, no EEPROM configuration, no ACPI/EDK2 detour.
-- `hardware.raspberry-pi.firmware = { enable = true; uboot.enable = true; }` stages firmware,
-  DTBs, overlays, `config.txt`, and `u-boot.bin` onto the FAT declaratively (nixos-hardware PR
-  #1894). Without it a custom SD image fails exactly the two failure modes documented in
-  nixos-hardware issue #1928 (missing Pi 5 DTBs, then "no kernel to load").
+- `pi5.nixosModules.raspberry-pi-5` sets
+  `hardware.raspberry-pi.firmware = { enable = true; uboot.enable = true; }`, which stages
+  firmware, DTBs, overlays, `config.txt`, and `u-boot.bin` onto the FAT declaratively
+  (nixos-hardware PR #1894). Without it a custom SD image fails exactly the two failure modes
+  documented in nixos-hardware issue #1928 (missing Pi 5 DTBs, then "no kernel to load").
 - `generic-extlinux-compatible` generations live on SD p2 and are rewritten on every
   `nixos-rebuild switch` **once the FAT/boot partitions are mounted** - see the bootloader-install
   caveat below, this does not happen automatically through `nixos-anywhere`.
-- **Kernel: the `nixos-hardware` vendor default (`linux-rpi`), not mainline.** An earlier revision
+- **Kernel: the vendor default (`linux-rpi` from the `pi5` input), not mainline.** An earlier revision
   of this repo pinned `pkgs.linuxPackages_latest` (mainline, 7.2.9 at the time) for cache-hit and
   4K-page reasons. In practice that kernel/firmware-DTB pairing produced `rp1_driver` probe
   failures (`-22`/EINVAL) that killed USB *and* Ethernet (RP1 hosts both on the Pi 5), confirmed via
@@ -49,7 +57,7 @@ Pi 5 EEPROM (SPI) -> stock firmware (SD p1 FAT) -> u-boot.bin -> extlinux.conf (
   nixos-hardware #1777/#854), and 16K pages. Empirically, **incus VM guests (4K-page Debian 13
   cloud image) boot fine on this 16K host kernel** - the commonly cited 16K-host/4K-guest KVM
   incompatibility did not reproduce in testing on this board/kernel combination.
-- `nixpkgs.overlays` patches `makeModulesClosure` with `allowMissing = true` - the
+- The `pi5` input patches `makeModulesClosure` with `allowMissing = true` - the
   `raspberry-pi-5` profile's initrd wants modules (e.g. `tpm-crb`) that the vendor kernel fork
   doesn't build; without this override the initrd build fails outright on the first missing module.
   (Not an effect of `hardware.enableAllHardware`, which is `false` in this config - verified via
@@ -65,7 +73,7 @@ main host config on every rebuild):
 | p1 | FAT32 | `/boot/firmware` | firmware, DTBs, overlays, `config.txt`, `u-boot.bin` |
 | p2 | ext4, bootable | `/boot` | `extlinux.conf` + kernel/initrd per generation |
 
-NVMe (the only disk disko / `nixos-anywhere` ever wipes):
+NVMe (the disk whose system contents disko recreates on a hard reset; the SD is disposable):
 
 | Subvol | Mount | Lifetime |
 |--------|-------|----------|
@@ -76,11 +84,11 @@ NVMe (the only disk disko / `nixos-anywhere` ever wipes):
 
 snapper: `services.snapper.configs."persist"` snapshots `/persist` on a nightly timeline
 (`TIMELINE_*`). snapper always stores snapshots in `<SUBVOLUME>/.snapshots` and requires that path to
-be a subvolume (else snapshots nest inside `@persist` and recurse), so `modules/storage.nix`
+be a subvolume (else snapshots nest inside `@persist` and recurse), so `pi5.impermanence`
 bind-mounts the dedicated `@snapshots` subvolume at `/persist/.snapshots` - leaving `/snapshots` as
 the clean top-level path. Without it, `snapper-timeline` fails on a fresh install.
 
-### The bootloader-install caveat (historical - now fixed, see disko-sd.nix)
+### The bootloader-install caveat (historical - now fixed, see `pi5.sdBoot`)
 
 `nixos-anywhere`'s install phase only auto-mounts filesystems **disko** declares - it has no flag
 to also mount other filesystems (confirmed via `--help`; no such option exists). Originally `disko`
@@ -90,22 +98,22 @@ booted once from that path, by luck, and then **impermanence wiped `@root` on th
 taking the bootloader files with it - requiring a manual chroot + `switch-to-configuration boot`
 dance after every install.
 
-**Fixed**: `disko-sd.nix` now describes the SD card's existing partitions (FAT `FIRMWARE` + ext4
+**Fixed**: `pi5.sdBoot` (in the `pi5` input) describes the SD card's existing partitions (FAT `FIRMWARE` + ext4
 `NIXOS_BOOT`) via disko's legacy `table` type (`format = "msdos"`, since the SD uses MBR not GPT).
-This is declared purely for `disko`'s **mount** mode - running
+This is intended for `disko`'s **mount** mode - running
 `nixos-anywhere --flake .#rpi5-8gb --disko-mode mount <host>` now mounts NVMe *and* the SD card
 together automatically, so the bootloader-install step succeeds on its own. Verified end-to-end on
 real hardware: no manual dance needed anymore for either a soft reset (SD reflash, NVMe untouched)
 or deploying onto an existing NVMe install. See Playbooks below.
 
-`disko-sd.nix`'s `table`/`msdos` partitions must **never** be used with disko's default `disko` or
-`format` modes - only `mount`. (disko's `_create` step for the `table` type checks `blkid` and
-skips re-partitioning if a table already exists, but the *nested filesystem* content's own
-`_create` would still unconditionally run `mkfs` - which would destroy the SD's bootstrap content.
-This repo's hosts never run disko in anything but `mount` mode against the SD; only the NVMe disk
-is ever destroyed/recreated, and only when explicitly requested.)
+`pi5.sdBoot` is intended for disko's **mount** mode. Its create-mode `preCreateHook` refuses
+to create a partition table or run `mkfs` on anything that is not already the expected
+two-partition MBR SD with `FIRMWARE`/`NIXOS_BOOT` labels, so a blank or damaged card is
+reflashed rather than silently repartitioned. A hard reset still treats the SD as disposable;
+this repo's `task install:mount` uses mount mode and preserves the existing SD and NVMe
+content. Only the NVMe is intentionally recreated by a hard reset.
 
-### Root-wipe mechanics (impermanence)
+### Root-wipe mechanics (impermanence, provided by `pi5.impermanence`)
 
 `boot.initrd.systemd.services.root-wipe` runs before `sysroot.mount`, deletes `@root`, recreates it
 empty. Several non-obvious things had to be fixed empirically:
@@ -441,12 +449,13 @@ instance; until then the DNS name will not resolve.
 | Decision | Value | Rationale |
 |----------|-------|-----------|
 | nixpkgs | `nixos-unstable`, pinned in `flake.lock` | stable 26.05 SD images lack Pi 5 boot files (nixpkgs PR #537862 is on unstable); pinning means updates only happen deliberately |
-| Board support | `nixos-hardware.nixosModules.raspberry-pi-5` | upstream profile: extlinux + BCM2712 DTB filter + NVMe/PCIe/RP1 initrd + firmware staging options |
-| Kernel | **vendor `linux-rpi` (profile default)** | mainline (`linuxPackages_latest`) produced `rp1_driver -22` against this firmware package's DTBs, killing USB+Ethernet; the vendor kernel is the pairing the firmware was actually built for. Trade-off documented above |
-| Boot device | microSD, bootloader permanently on SD | U-Boot 2026.07 in nixpkgs cannot read boot files from NVMe; upstream NVMe boot landed for U-Boot 2026.10 and will land in nixpkgs later - at that point NVMe-only boot is a config-only change |
-| SD layout | plain 2-partition (stock `sd-image-aarch64.nix`) | a 3-partition design with a persistent rescue OS was tried and reverted - see Hosts section |
-| Filesystem | btrfs (checksums on write + scrubs; no third-party module ever constrains `nix flake update`) | the RAM lens made this the winner over ZFS for 8/4 GB boards |
-| Install | `nixos-anywhere`, kexec skipped | `VARIANT_ID=installer` on the bootstrap image makes nixos-anywhere's `runKexec()` early-return; kexec on Pi 5 is flaky |
+| Pi 5/NVMe/boot layer | `inputs.pi5` (`nixos-raspberry-pi-5`) | extracted reusable modules and imaging CLI; this repo keeps the application/fleet config plus its extra persistence paths |
+| Board support | `inputs.pi5` → `nixos-hardware.nixosModules.raspberry-pi-5` | upstream profile: extlinux + BCM2712 DTB filter + NVMe/PCIe/RP1 initrd + firmware staging options |
+| Kernel | **vendor `linux-rpi` (profile default via `inputs.pi5`)** | mainline (`linuxPackages_latest`) produced `rp1_driver -22` against this firmware package's DTBs, killing USB+Ethernet; the vendor kernel is the pairing the firmware was actually built for. Trade-off documented above |
+| Boot device | microSD, bootloader permanently on SD | U-Boot v2026.10 still lacks NVMe support (`rpi_arm64_defconfig` has no `CONFIG_NVME_PCI`/`CONFIG_CMD_NVME`); NVMe-only boot needs the Pi firmware plus a kernel bootloader or a future U-Boot patch |
+| SD layout | plain 2-partition (stock `sd-image-aarch64` shape, provided by `inputs.pi5`) | a 3-partition design with a persistent rescue OS was tried and reverted - see Hosts section |
+| Filesystem | btrfs (checksums on write + scrubs; no third-party module ever constrains `nix flake update`; layout provided by `inputs.pi5`) | the RAM lens made this the winner over ZFS for 8/4 GB boards |
+| Install | `nixos-anywhere`, kexec skipped (installer provided by `inputs.pi5`) | `VARIANT_ID=installer` on the bootstrap image makes nixos-anywhere's `runKexec()` early-return; kexec on Pi 5 is flaky |
 | Topology | standalone pair, no cluster | 2-member Cowsql/Raft clusters lose quorum on a single node update; container live migration is stop-and-move anyway for real workloads; offline `incus move` covers the need |
 | TLS server cert | Let's Encrypt, DNS-01 via GoDaddy | publicly trusted (no browser warning, no keychain import), no inbound `:80`, no CA to run or rotate; GoDaddy creds held in sops |
 | Internal TLS trust | vendored Esselius root CA (`modules/pki.nix`) | Attic serves a step-ca certificate, so the hosts need the root in their bundle; this is the same public certificate `konfig` trusts, and a root rotation replaces one file |
@@ -473,7 +482,9 @@ instance; until then the DNS name will not resolve.
 `nixos-anywhere` itself). Once a main system (`rpi5-8gb`/`rpi5-4gb`) is actually running, root SSH
 is disabled there - use `admin@<pi-ip>` + `--sudo` instead (see "Update + rollback" below).
 
-These commands are wrapped as `task` targets in `Taskfile.yml` (`task --list` shows them all).
+The Pi 5/NVMe/imaging implementation lives in the `pi5` input; these commands are wrapped as
+`task` targets in `Taskfile.yml` (`task --list` shows them all) around its `pi5-image` CLI. You
+can also run the CLI directly with `nix run .#pi5-image -- ...`.
 `HOST` (default `rpi5-8gb`) is the source of truth; the address comes from `inventory.nix`, e.g.
 `task deploy HOST=rpi5-4gb`. Set `IP=` only for a temporary/bootstrap address, and then also
 `ALLOW_IP_OVERRIDE=1`; a mismatched `HOST`/`IP` is refused. `task install` is the hard reset
@@ -505,9 +516,12 @@ skipped and root SSH enabled, contained to a throwaway image that gets reflashed
 
 ### Install / hard reset (wipes NVMe, from the Mac)
 
+The SD card is a disposable installer medium and may be touched during this path. The NVMe is
+the disk whose system contents are intentionally recreated.
+
 ```bash
-task bootstrap                    # nix build + decompress to pi5-bootstrap.img
-CONFIRM=FLASH task flash DISK=/dev/rdiskX   # unmountDisk + dd
+task bootstrap                    # pi5-image build -> pi5-bootstrap.img
+CONFIRM=FLASH task flash DISK=/dev/rdiskX   # pi5-image flash (unmount + dd + eject)
 
 # boot the Pi (NVMe attached), then:
 CONFIRM=WIPE task install HOST=rpi5-8gb
@@ -522,11 +536,11 @@ ssh admin@<pi-ip> 'sudo blkdiscard -f /dev/nvme0n1'
 ```
 
 That's it - no manual follow-up dance needed anymore (see "bootloader-install caveat" above:
-`disko-sd.nix` lets `nixos-anywhere` mount the SD card's existing partitions automatically, so the
+`pi5.sdBoot` lets `nixos-anywhere` mount the SD card's existing partitions automatically, so the
 bootloader install step succeeds in the same run and the Pi reboots straight into the real system).
 
-If the Mac build host misbehaves during install, pre-build the disko script + toplevel and pass
-`--store-paths` (nixos-anywhere #18 pattern).
+If the Mac build host misbehaves during install, bypass the CLI and run `nixos-anywhere`
+directly with pre-built `--store-paths` (the nixos-anywhere #18 pattern).
 
 ### Soft reset (SD reflash, reuse existing NVMe content - e.g. after a wedged SD/bootloader)
 
@@ -631,7 +645,7 @@ generation at the U-Boot prompt (extlinux menu, SD p2). Root state is irrelevant
 | Symptom | Fix | NVMe impact |
 |---|---|---|
 | SD card / bootloader broken or physically dead, NVMe fine | reflash `images.rpi5-bootstrap`, then **soft reset** above | none |
-| Want a genuinely clean slate | reflash, then **hard reset** above (default `nixos-anywhere`, no `--disko-mode`) | **wiped** (disko's default mode destroys + recreates) |
+| Want a genuinely clean slate | reflash, then **hard reset** above (`pi5-image install --mode wipe`) | **wiped** (disko's create mode destroys + recreates) |
 
 ### Migration between hosts (offline, no cluster)
 
@@ -668,6 +682,14 @@ pushes fine); the tracker uses the JSONL snapshot instead. Only the Mac needs
 
 ## Verification status
 
+The hardware runs below were done before the Pi 5/NVMe/boot layer was extracted into the
+`pi5` input. The migration preserved the original layout, kernel, firmware, persistence,
+installer `sdImage`, installer SSH settings, and `variant_id`. The extracted layer was then
+hardened intentionally: `/boot` and the firmware partition mount by label, the SD create
+path is guarded, the root wipe is fail-closed, snapshot yearly retention defaults to 0, and
+the installer no longer duplicates the `wheel` group. These are deliberate behavioral
+changes, not drift.
+
 Confirmed working on real hardware (8 GB board):
 
 - Vendor kernel boots, RP1 (USB + Ethernet) alive, NVMe enumerated on PCIe
@@ -690,7 +712,7 @@ Confirmed working on real hardware (8 GB board):
 - Full impermanence wipe-cycle test, post partition-layout-simplification and post
   `root-wipe` `RemainAfterExit` fix: marker file on `/` correctly disappears after reboot,
   `/persist` marker correctly survives, two consecutive clean reboots, zero failed units each time
-- `nixos-anywhere --disko-mode mount` (soft reset, `disko-sd.nix`): mounts NVMe + SD together
+- `nixos-anywhere --disko-mode mount` (soft reset, `pi5.sdBoot`): mounts NVMe + SD together
   automatically, bootloader install succeeds with zero manual steps, verified end-to-end on real
   hardware including a full reboot into the working system afterward - the old manual chroot +
   `nixos-enter` dance is no longer required for either install path
@@ -731,20 +753,22 @@ Pre-flight tested from macOS (not on the Pi):
 ## Known risks
 
 - Impermanence blind-spots: forgetting to persist a service's state is silent (state lost on
-  reboot). Any new service gets reviewed against `modules/storage.nix`'s persist list.
+  reboot). Any new service gets reviewed against `pi5.impermanence`'s persist list and this
+  repo's `modules/storage.nix` extra directories.
 - The Incus API/UI listens on all interfaces (`core.https_address = ":8443"`, `local.incus.httpsPort`)
   and the firewall opens that port globally, so it is reachable from the LAN and the VPN, not just
   `wg0`. Client auth is certificate-based; narrowing the listener/firewall to `wg0`/LAN would be
   defense in depth if that exposure ever becomes unwanted.
-- Every host eval prints disko's "The legacy table is outdated..." warning: `disko-sd.nix`
+- Every host eval prints disko's "The legacy table is outdated..." warning: `pi5.sdBoot`
   necessarily uses disko's legacy `table`/`msdos` type for the MBR SD card (disko's new `gpt` type is
-  GPT-only and partlabel-addressed, so it can't describe this disk). It is mount-only and harmless
-  (disko #812 - no way to silence just this warning; `nix --quiet flake check` hides it).
+  GPT-only and partlabel-addressed, so it can't describe this disk). It is intended for mount
+  mode and harmless (disko #812 - no way to silence just this warning; `nix --quiet flake check`
+  hides it).
 - NVMe adapter/EEPROM quirks exist for some M.2 hats (nvmd/nixos-raspberrypi #117) - only relevant
   to a future NVMe-boot path; irrelevant to the current SD-boot design.
 - Power: 27 W USB-C PSU + active cooling required for incus-sustained load on either board.
 - Vendor kernel builds are uncached (no public Hydra jobset for `linux-rpi` yet); a `nix flake
-  update` that bumps nixos-hardware can mean a multi-hour local kernel build.
+  update` that bumps the `pi5` input's nixos-hardware pin can mean a multi-hour local kernel build.
 - sops: a host whose SSH host key is not a recipient in `.sops.yaml` fails secret decryption at
   boot (so `incus.service` gets no GoDaddy creds and no cert is issued). Adding recipients means
   re-running `sops updatekeys` on that host's `secrets/<host>.yaml` (and
@@ -767,7 +791,8 @@ exposure, root-CA rotation) are tracked in beads: `bd list --label readme-scan` 
 
 ## Future paths (tracked in beads)
 
-The longer-horizon work - NVMe-only boot, mainline-kernel re-evaluation, IPv6 on `incusbr-vpn`,
-Zigbee passthrough, and multi-host scaling - is tracked in beads instead of duplicated here. Run
+The longer-horizon work - NVMe-only boot and mainline-kernel re-evaluation (now tracked in the
+`pi5` repository), IPv6 on `incusbr-vpn`, Zigbee passthrough, and multi-host scaling - is tracked
+in beads instead of duplicated here. Run
 `bd list --label readme-scan` (or `bd ready`) from the dev shell; each issue carries its README
 source and acceptance criteria.
