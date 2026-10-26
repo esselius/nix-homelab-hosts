@@ -112,7 +112,7 @@
         ]
       },
       "locked": {
-        "narHash": "sha256-S4j2PvMiX3jTe9bWLhOL3kqkAhPEGXjpt5AXBje2Evw=",
+        "narHash": "sha256-7TET2ALHapDiSV31j9ia1FSBBHGxGHt9dGmESJzG2A0=",
         "path": "/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5",
         "type": "path"
       },
