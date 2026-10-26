@@ -22,10 +22,10 @@ module options and `pi5-image` CLI.
 - Hosts (`hosts/*.nix`) tune only `local.incus.{network,guest,tls,dnsAddress,metrics}`,
   `local.wireguard`, `local.dns`, plus `networking.hostName` / `stateVersion`;
   everything else belongs in `modules/`.
-- `modules/storage.nix` only adds project-specific persistence via
-  `pi5.impermanence.extraDirectories` (`/var/lib/incus`, `/var/lib/unbound`).
-  Generic persistence, fstrim, scrub, snapper, and the root reset come from the
-  `pi5` input.
+- `modules/storage.nix` adds project-specific persistence via
+  `pi5.impermanence.extraDirectories` (`/var/lib/incus`, `/var/lib/unbound`) and
+  opts the reference hosts into snapshots. Generic persistence, fstrim, scrub,
+  the snapper configuration, and the root reset come from the `pi5` input.
 - Bump the `pi5` flake input deliberately (`nix flake update pi5`); a
   `nixos-hardware` bump there can trigger a long local vendor-kernel build.
 - This repo documents *why*, not just what: keep the README's decisions ledger,

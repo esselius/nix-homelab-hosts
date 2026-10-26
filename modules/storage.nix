@@ -4,8 +4,15 @@
   # (root wipe, fstrim, auto-scrub, snapper, machine-id/SSH host keys,
   # /var/lib/nixos, /var/log) comes from pi5.impermanence via
   # pi5.nixosModules.default.
-  pi5.impermanence.extraDirectories = [
-    "/var/lib/incus"
-    "/var/lib/unbound"
-  ];
+  pi5.impermanence = {
+    # Snapshots are a site policy and are off in the extracted default stack.
+    # The reference hosts keep the original behavior: nightly timeline
+    # snapshots of /persist.
+    snapshots.enable = true;
+
+    extraDirectories = [
+      "/var/lib/incus"
+      "/var/lib/unbound"
+    ];
+  };
 }

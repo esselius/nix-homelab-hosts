@@ -139,7 +139,7 @@ tasks:
   bootstrap:
     desc: Build the bootstrap SD image and decompress it to {{.BOOTSTRAP_IMAGE}}
     cmds:
-      - nix run {{.FLAKE}}#pi5-image -- build --flake {{.FLAKE}} --installer rpi5-bootstrap --output {{.BOOTSTRAP_IMAGE}} --force
+      - nix run {{.FLAKE}}#pi5-image -- build --accept-flake-config --flake {{.FLAKE}} --installer rpi5-bootstrap --output {{.BOOTSTRAP_IMAGE}} --force
 
   flash:
     desc: 'Write {{.BOOTSTRAP_IMAGE}} to a raw disk, e.g. CONFIRM=FLASH task flash DISK=/dev/rdisk4'

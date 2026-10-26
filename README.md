@@ -106,10 +106,12 @@ together automatically, so the bootloader-install step succeeds on its own. Veri
 real hardware: no manual dance needed anymore for either a soft reset (SD reflash, NVMe untouched)
 or deploying onto an existing NVMe install. See Playbooks below.
 
-`pi5.sdBoot`'s `table`/`msdos` partitions are intended for disko's **mount** mode. The nested
-filesystem `_create` steps can run `mkfs` in disko's default/format modes; treat the SD as
-disposable during a hard reset. This repo's `task install:mount` uses mount mode and preserves
-the existing SD and NVMe content; only the NVMe is intentionally recreated by a hard reset.
+`pi5.sdBoot` is intended for disko's **mount** mode. Its create-mode `preCreateHook` refuses
+to create a partition table or run `mkfs` on anything that is not already the expected
+two-partition MBR SD with `FIRMWARE`/`NIXOS_BOOT` labels, so a blank or damaged card is
+reflashed rather than silently repartitioned. A hard reset still treats the SD as disposable;
+this repo's `task install:mount` uses mount mode and preserves the existing SD and NVMe
+content. Only the NVMe is intentionally recreated by a hard reset.
 
 ### Root-wipe mechanics (impermanence, provided by `pi5.impermanence`)
 
@@ -450,7 +452,7 @@ instance; until then the DNS name will not resolve.
 | Pi 5/NVMe/boot layer | `inputs.pi5` (`nixos-raspberry-pi-5`) | extracted reusable modules and imaging CLI; this repo keeps the application/fleet config plus its extra persistence paths |
 | Board support | `inputs.pi5` → `nixos-hardware.nixosModules.raspberry-pi-5` | upstream profile: extlinux + BCM2712 DTB filter + NVMe/PCIe/RP1 initrd + firmware staging options |
 | Kernel | **vendor `linux-rpi` (profile default via `inputs.pi5`)** | mainline (`linuxPackages_latest`) produced `rp1_driver -22` against this firmware package's DTBs, killing USB+Ethernet; the vendor kernel is the pairing the firmware was actually built for. Trade-off documented above |
-| Boot device | microSD, bootloader permanently on SD | U-Boot 2026.07 in nixpkgs cannot read boot files from NVMe; upstream NVMe boot landed for U-Boot 2026.10 and will land in nixpkgs later - at that point NVMe-only boot is a config-only change |
+| Boot device | microSD, bootloader permanently on SD | U-Boot v2026.10 still lacks NVMe support (`rpi_arm64_defconfig` has no `CONFIG_NVME_PCI`/`CONFIG_CMD_NVME`); NVMe-only boot needs the Pi firmware plus a kernel bootloader or a future U-Boot patch |
 | SD layout | plain 2-partition (stock `sd-image-aarch64` shape, provided by `inputs.pi5`) | a 3-partition design with a persistent rescue OS was tried and reverted - see Hosts section |
 | Filesystem | btrfs (checksums on write + scrubs; no third-party module ever constrains `nix flake update`; layout provided by `inputs.pi5`) | the RAM lens made this the winner over ZFS for 8/4 GB boards |
 | Install | `nixos-anywhere`, kexec skipped (installer provided by `inputs.pi5`) | `VARIANT_ID=installer` on the bootstrap image makes nixos-anywhere's `runKexec()` early-return; kexec on Pi 5 is flaky |
@@ -537,8 +539,8 @@ That's it - no manual follow-up dance needed anymore (see "bootloader-install ca
 `pi5.sdBoot` lets `nixos-anywhere` mount the SD card's existing partitions automatically, so the
 bootloader install step succeeds in the same run and the Pi reboots straight into the real system).
 
-If the Mac build host misbehaves during install, pre-build the disko script + toplevel and pass
-`--store-paths` (nixos-anywhere #18 pattern).
+If the Mac build host misbehaves during install, bypass the CLI and run `nixos-anywhere`
+directly with pre-built `--store-paths` (the nixos-anywhere #18 pattern).
 
 ### Soft reset (SD reflash, reuse existing NVMe content - e.g. after a wedged SD/bootloader)
 
@@ -681,10 +683,12 @@ pushes fine); the tracker uses the JSONL snapshot instead. Only the Mac needs
 ## Verification status
 
 The hardware runs below were done before the Pi 5/NVMe/boot layer was extracted into the
-`pi5` input. After the migration, the effective `fileSystems`, disko layout, kernel,
-firmware staging, persistence/snapper settings, installer `sdImage`, and installer SSH
-settings were diffed against the pre-extraction config and match (only bind-mount ordering
-differs).
+`pi5` input. The migration preserved the original layout, kernel, firmware, persistence,
+installer `sdImage`, installer SSH settings, and `variant_id`. The extracted layer was then
+hardened intentionally: `/boot` and the firmware partition mount by label, the SD create
+path is guarded, the root wipe is fail-closed, snapshot yearly retention defaults to 0, and
+the installer no longer duplicates the `wheel` group. These are deliberate behavioral
+changes, not drift.
 
 Confirmed working on real hardware (8 GB board):
 
