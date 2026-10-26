@@ -112,13 +112,18 @@
         ]
       },
       "locked": {
-        "narHash": "sha256-7TET2ALHapDiSV31j9ia1FSBBHGxGHt9dGmESJzG2A0=",
-        "path": "/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5",
-        "type": "path"
+        "lastModified": 1792974880,
+        "narHash": "sha256-1DKApXtsgBk/+jPnZNmX+4XSgVnPIP4xAek+gyUda8s=",
+        "owner": "esselius",
+        "repo": "nixos-raspberry-pi-5",
+        "rev": "b7740c5f44864ef61795efb5e5d532b8122d1ccf",
+        "type": "github"
       },
       "original": {
-        "path": "/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5",
-        "type": "path"
+        "owner": "esselius",
+        "ref": "v0.1.0",
+        "repo": "nixos-raspberry-pi-5",
+        "type": "github"
       }
     },
     "root": {

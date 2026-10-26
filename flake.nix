@@ -17,10 +17,9 @@
     };
 
     # Raspberry Pi 5 hardware, NVMe disk layout, SD boot, impermanence, and
-    # the bootstrap installer live in this reusable flake.
-    # TODO: switch to github:esselius/nixos-raspberry-pi-5 once published.
+    # the bootstrap installer live in this reusable, tagged flake.
     pi5 = {
-      url = "path:/Users/peteresselius/src/tries/2026-10-25-nixos-raspberry-pi-5";
+      url = "github:esselius/nixos-raspberry-pi-5/v0.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
